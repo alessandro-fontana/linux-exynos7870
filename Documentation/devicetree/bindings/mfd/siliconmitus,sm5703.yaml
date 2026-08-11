@@ -1,0 +1,71 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/mfd/siliconmitus,sm5703.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: Silicon Mitus SM5703 PMIC
+
+maintainers:
+  - Markuss Broks <markuss.broks@gmail.com>
+
+description: |
+  The SM5703 combines a charger, LDO and buck regulators, a flash LED
+  driver, a MUIC USB switch and a fuel gauge.  The charger, the
+  regulators and the LED driver share the I2C address described by this
+  binding.  The fuel gauge has an address of its own, usually on a
+  different bus, and is described separately by
+  siliconmitus,sm5703-fuelgauge.yaml.
+
+properties:
+  compatible:
+    const: siliconmitus,sm5703
+
+  reg:
+    maxItems: 1
+
+  interrupts:
+    maxItems: 1
+
+  reset-gpios:
+    maxItems: 1
+    description: GPIO connected to the MRSTB pin.
+
+  charger:
+    $ref: /schemas/power/supply/siliconmitus,sm5703-charger.yaml#
+    type: object
+    unevaluatedProperties: false
+
+required:
+  - compatible
+  - reg
+
+additionalProperties: false
+
+examples:
+  - |
+    #include <dt-bindings/gpio/gpio.h>
+    #include <dt-bindings/interrupt-controller/irq.h>
+
+    i2c {
+        #address-cells = <1>;
+        #size-cells = <0>;
+
+        pmic@49 {
+            compatible = "siliconmitus,sm5703";
+            reg = <0x49>;
+
+            interrupt-parent = <&gpa2>;
+            interrupts = <7 IRQ_TYPE_EDGE_FALLING>;
+
+            reset-gpios = <&gpc7 4 GPIO_ACTIVE_LOW>;
+
+            charger {
+                compatible = "siliconmitus,sm5703-charger";
+                monitored-battery = <&battery>;
+                extcon = <&muic>;
+                enable-gpios = <&gpd1 3 GPIO_ACTIVE_LOW>;
+                input-current-limit-microamp = <1650000>;
+            };
+        };
+    };
