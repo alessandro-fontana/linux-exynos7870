@@ -1,0 +1,214 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/power/supply/siliconmitus,sm5703-fuelgauge.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: Silicon Mitus SM5703 fuel gauge
+
+maintainers:
+  - Linux battery maintainers <linux-pm@vger.kernel.org>
+
+description: |
+  The fuel gauge block of the Silicon Mitus SM5703 PMIC.  It has its own
+  I2C address, usually on a different bus than the rest of the chip, and
+  is independent from it.
+
+  The chip measures the temperature of its own die, not of the cell.
+  Where the pack thermistor is wired to something else, as it usually is,
+  a thermal zone named "battery-thermal" is what the driver reports as
+  the battery temperature.
+
+  The gauge tracks the state of charge by following the cell voltage, so
+  it needs a set of cell specific calibration tables.  Those are not
+  discoverable and have to be supplied here; they are normally lifted
+  from the vendor device tree of the device the cell ships in.
+
+allOf:
+  - $ref: power-supply.yaml#
+
+properties:
+  compatible:
+    const: siliconmitus,sm5703-fuelgauge
+
+  reg:
+    maxItems: 1
+
+  interrupts:
+    maxItems: 1
+    description: Alert interrupt, asserted on low charge or low voltage.
+
+  monitored-battery:
+    description:
+      The battery being monitored.  Its operating-range-celsius, if
+      given, is what the reported health is judged against.
+
+  siliconmitus,battery-table-discharge:
+    $ref: /schemas/types.yaml#/definitions/uint32-array
+    minItems: 16
+    maxItems: 16
+    description:
+      Cell voltage points of the discharge curve, in units of 1/2.048 mV.
+
+  siliconmitus,battery-table-charge:
+    $ref: /schemas/types.yaml#/definitions/uint32-array
+    minItems: 16
+    maxItems: 16
+    description:
+      Cell voltage points of the charge curve, in units of 1/2.048 mV.
+
+  siliconmitus,battery-table-soc:
+    $ref: /schemas/types.yaml#/definitions/uint32-array
+    minItems: 16
+    maxItems: 16
+    description:
+      State of charge matching each point of the two voltage tables.
+
+  siliconmitus,rce-values:
+    $ref: /schemas/types.yaml#/definitions/uint32-array
+    minItems: 3
+    maxItems: 3
+    description: Coefficients of the resistance and capacity estimator.
+
+  siliconmitus,dtcd-value:
+    $ref: /schemas/types.yaml#/definitions/uint32
+    description: Discharge time constant of the cell.
+
+  siliconmitus,rs-values:
+    $ref: /schemas/types.yaml#/definitions/uint32-array
+    minItems: 4
+    maxItems: 4
+    description:
+      Internal series resistance of the cell, followed by the mixing
+      factor and the upper and lower bounds the gauge may track it to.
+
+  siliconmitus,vit-period:
+    $ref: /schemas/types.yaml#/definitions/uint32
+    description: Sampling period of the voltage, current and temperature.
+
+  siliconmitus,mix-values:
+    $ref: /schemas/types.yaml#/definitions/uint32-array
+    minItems: 2
+    maxItems: 2
+    description:
+      Rate at which the voltage and coulomb counter estimates are mixed,
+      and the blanking interval applied at start up.
+
+  siliconmitus,topoff-soc:
+    $ref: /schemas/types.yaml#/definitions/uint32-array
+    minItems: 2
+    maxItems: 2
+    description:
+      Whether the top off state of charge is enabled, and its level.
+
+  siliconmitus,volt-cal:
+    $ref: /schemas/types.yaml#/definitions/uint32
+    description: Gain and offset calibration of the voltage measurement.
+
+  siliconmitus,curr-cal:
+    $ref: /schemas/types.yaml#/definitions/uint32
+    description: Gain and offset calibration of the current measurement.
+
+  siliconmitus,temp-std:
+    $ref: /schemas/types.yaml#/definitions/uint32
+    description:
+      Temperature, in degrees Celsius, at which the current calibration
+      above was taken.
+
+  siliconmitus,temp-offset:
+    $ref: /schemas/types.yaml#/definitions/uint32
+    description:
+      Temperature step, in degrees Celsius, over which one unit of
+      siliconmitus,temp-offset-cal is applied.
+
+  siliconmitus,temp-offset-cal:
+    $ref: /schemas/types.yaml#/definitions/uint32
+    description:
+      Correction applied to the current calibration per temperature step.
+
+  siliconmitus,charge-offset-cal:
+    $ref: /schemas/types.yaml#/definitions/int32
+    description:
+      Correction applied to the current calibration while charging.
+
+  siliconmitus,tem-poff:
+    $ref: /schemas/types.yaml#/definitions/uint32-array
+    minItems: 4
+    maxItems: 4
+    description:
+      Cut off voltage and hysteresis, in mV, below which the gauge stops
+      tracking the internal resistance and uses the calibrated value.
+      The first pair applies above 15 degrees Celsius, the second below.
+
+  siliconmitus,alert-soc-percent:
+    minimum: 0
+    maximum: 100
+    default: 2
+    description:
+      State of charge below which the alert interrupt is raised.
+
+required:
+  - compatible
+  - reg
+
+dependencies:
+  siliconmitus,battery-table-discharge:
+    - siliconmitus,battery-table-charge
+    - siliconmitus,battery-table-soc
+    - siliconmitus,rce-values
+    - siliconmitus,dtcd-value
+    - siliconmitus,rs-values
+    - siliconmitus,vit-period
+    - siliconmitus,mix-values
+    - siliconmitus,topoff-soc
+    - siliconmitus,volt-cal
+    - siliconmitus,curr-cal
+    - siliconmitus,temp-std
+    - siliconmitus,temp-offset
+    - siliconmitus,temp-offset-cal
+    - siliconmitus,charge-offset-cal
+    - siliconmitus,tem-poff
+
+additionalProperties: false
+
+examples:
+  - |
+    #include <dt-bindings/interrupt-controller/irq.h>
+
+    i2c {
+        #address-cells = <1>;
+        #size-cells = <0>;
+
+        fuel-gauge@71 {
+            compatible = "siliconmitus,sm5703-fuelgauge";
+            reg = <0x71>;
+
+            interrupt-parent = <&gpa0>;
+            interrupts = <3 IRQ_TYPE_EDGE_FALLING>;
+
+            monitored-battery = <&battery>;
+
+            siliconmitus,battery-table-discharge =
+                <0x1400 0x1b88 0x1ce5 0x1d35 0x1d5a 0x1d78 0x1ddd 0x1e37
+                 0x1e78 0x1ed7 0x1efb 0x1f72 0x2008 0x2133 0x220c 0x2400>;
+            siliconmitus,battery-table-charge =
+                <0x1400 0x1b88 0x1ce5 0x1d35 0x1d5a 0x1d78 0x1ddd 0x1e37
+                 0x1e78 0x1ed7 0x1efb 0x1f72 0x2008 0x2133 0x220c 0x2400>;
+            siliconmitus,battery-table-soc =
+                <0x0 0x81 0x1f7 0x28c 0x36d 0x658 0xaba 0x1207
+                 0x1954 0x1f2b 0x20a1 0x238d 0x2964 0x31dc 0x371e 0x3749>;
+            siliconmitus,rce-values = <0x0749 0x0580 0x0371>;
+            siliconmitus,dtcd-value = <0x1>;
+            siliconmitus,rs-values = <0x9b 0x47a 0x3800 0x00a4>;
+            siliconmitus,vit-period = <0x3506>;
+            siliconmitus,mix-values = <0x0503 0x0004>;
+            siliconmitus,topoff-soc = <0x0 0x5>;
+            siliconmitus,volt-cal = <0x809e>;
+            siliconmitus,curr-cal = <0x7a85>;
+            siliconmitus,temp-std = <25>;
+            siliconmitus,temp-offset = <10>;
+            siliconmitus,temp-offset-cal = <0x1>;
+            siliconmitus,charge-offset-cal = <(-1)>;
+            siliconmitus,tem-poff = <3400 50 3350 50>;
+        };
+    };
