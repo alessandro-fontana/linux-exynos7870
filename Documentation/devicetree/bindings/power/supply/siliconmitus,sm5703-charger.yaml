@@ -1,0 +1,68 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/power/supply/siliconmitus,sm5703-charger.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: Silicon Mitus SM5703 charger
+
+maintainers:
+  - Linux battery maintainers <linux-pm@vger.kernel.org>
+
+description:
+  The charger block of the Silicon Mitus SM5703 PMIC.  It is a child of
+  the PMIC node described by siliconmitus,sm5703.yaml and shares that
+  node's I2C address.
+
+allOf:
+  - $ref: power-supply.yaml#
+
+properties:
+  compatible:
+    const: siliconmitus,sm5703-charger
+
+  monitored-battery: true
+
+  enable-gpios:
+    maxItems: 1
+    description:
+      GPIO connected to the nCHGEN pin, which gates the charging path.
+      The pin is active low in hardware, so this is normally declared
+      GPIO_ACTIVE_LOW.
+
+  input-current-limit-microamp:
+    description:
+      Highest current the board can carry from the charging port.  This
+      is a ceiling rather than a target, so nothing raises the limit
+      above it, and the charger only draws this much once something has
+      identified the port as a dedicated charger.  Without an extcon
+      device to do that identification the charger has nothing else to
+      go on and uses this value directly, so it must then be safe for
+      every source the port may see.
+    minimum: 100000
+    maximum: 2100000
+
+  extcon:
+    maxItems: 1
+    description:
+      Phandle to the MUIC that reports what kind of charging port is
+      attached.  Without it the charger cannot tell a wall adapter from
+      a host port.
+
+required:
+  - compatible
+  - monitored-battery
+
+additionalProperties: false
+
+examples:
+  - |
+    #include <dt-bindings/gpio/gpio.h>
+
+    charger {
+        compatible = "siliconmitus,sm5703-charger";
+        monitored-battery = <&battery>;
+        extcon = <&muic>;
+        enable-gpios = <&gpd1 3 GPIO_ACTIVE_LOW>;
+        input-current-limit-microamp = <1650000>;
+    };

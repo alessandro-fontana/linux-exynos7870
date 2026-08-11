@@ -240,6 +240,18 @@ config BATTERY_S2MU005
 
 	  This driver, if built as a module, will be called s2mu005-fuel-gauge.
 
+config CHARGER_SM5703
+	tristate "Silicon Mitus SM5703 charger"
+	depends on MFD_SM5703
+	help
+	  Say Y here to enable support for the charger of the Silicon Mitus
+	  SM5703 PMIC.  It reports whether a charger is connected and what
+	  the charging state is, and sets the input current limit, the
+	  charging current and the battery regulation voltage.
+
+	  This driver can also be built as a module. If so, the module will
+	  be called sm5703-charger.
+
 config BATTERY_SM5703
 	tristate "Silicon Mitus SM5703 fuel gauge"
 	depends on I2C
