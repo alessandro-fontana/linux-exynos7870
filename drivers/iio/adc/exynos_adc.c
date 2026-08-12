@@ -47,6 +47,12 @@
 #define ADC_V2_INT_ST(x)	((x) + 0x14)
 #define ADC_V2_VER(x)		((x) + 0x20)
 
+/*
+ * Exynos7870 keeps the conversion result where the ADC_V2 layout has its
+ * status register.
+ */
+#define ADC_EXYNOS7870_DAT_OFFSET	0x08
+
 /* Bit definitions for ADC_V1 */
 #define ADC_V1_CON_RES		(1u << 16)
 #define ADC_V1_CON_PRSCEN	(1u << 14)
@@ -71,6 +77,7 @@
 
 /* Bit definitions for ADC_V2 */
 #define ADC_V2_CON1_SOFT_RESET	(1u << 2)
+#define ADC_V2_CON1_SOFT_NON_RESET	(1u << 1)
 
 #define ADC_V2_CON2_OSEL	(1u << 10)
 #define ADC_V2_CON2_ESEL	(1u << 9)
@@ -405,6 +412,33 @@ static const struct exynos_adc_data exynos7_adc_data = {
 	.start_conv	= exynos_adc_v2_start_conv,
 };
 
+/*
+ * The Exynos7870 ADC needs the reset it was just put into to be released
+ * again; leaving it asserted, as exynos_adc_exynos7_init_hw() does, keeps
+ * the block from ever starting a conversion.
+ */
+static void exynos_adc_exynos7870_init_hw(struct exynos_adc *info)
+{
+	writel(ADC_V2_CON1_SOFT_RESET, ADC_V2_CON1(info->regs));
+	writel(ADC_V2_CON1_SOFT_NON_RESET, ADC_V2_CON1(info->regs));
+
+	writel(ADC_V2_CON2_C_TIME(6), ADC_V2_CON2(info->regs));
+
+	/* Enable interrupts */
+	writel(1, ADC_V2_INT_EN(info->regs));
+}
+
+static const struct exynos_adc_data exynos7870_adc_data = {
+	.num_channels	= MAX_ADC_V1_CHANNELS,
+	.dat_offset	= ADC_EXYNOS7870_DAT_OFFSET,
+	.mask		= ADC_DATX_MASK,	/* 12 bit ADC resolution */
+
+	.init_hw	= exynos_adc_exynos7870_init_hw,
+	.exit_hw	= exynos_adc_v2_exit_hw,
+	.clear_irq	= exynos_adc_v2_clear_irq,
+	.start_conv	= exynos_adc_v2_start_conv,
+};
+
 static const struct of_device_id exynos_adc_match[] = {
 	{
 		.compatible = "samsung,s3c6410-adc",
@@ -427,6 +461,9 @@ static const struct of_device_id exynos_adc_match[] = {
 	}, {
 		.compatible = "samsung,exynos7-adc",
 		.data = &exynos7_adc_data,
+	}, {
+		.compatible = "samsung,exynos7870-adc",
+		.data = &exynos7870_adc_data,
 	},
 	{ }
 };
