@@ -82,6 +82,13 @@ static struct reg_data sm5502_reg_data[] = {
 		.val = SM5502_REG_CONTROL_MASK_INT_MASK,
 		.invert = false,
 	}, {
+		.reg = SM5502_REG_TIMING_SET1,
+		.val = (TIMING_ADC_DET_200MS
+				<< SM5502_REG_TIMING_SET1_ADC_DET_SHIFT)
+			| (TIMING_KEY_PRESS_100MS
+				<< SM5502_REG_TIMING_SET1_KEY_PRESS_SHIFT),
+		.invert = true,
+	}, {
 		.reg = SM5502_REG_INTMASK1,
 		.val = SM5502_REG_INTM1_KP_MASK
 			| SM5502_REG_INTM1_LKP_MASK
