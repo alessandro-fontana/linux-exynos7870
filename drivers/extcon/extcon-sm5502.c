@@ -450,11 +450,31 @@ static unsigned int sm5502_muic_get_cable_type(struct sm5502_muic_info *info)
 		case SM5502_REG_DEV_TYPE1_DEDICATED_CHG_MASK:
 			cable_type = SM5502_MUIC_ADC_OPEN_TA;
 			break;
-		default:
+		default: {
+			unsigned int dev_type3;
+
+			/*
+			 * Chargers that do not follow BC 1.2 are reported in
+			 * DEV_TYPE3 instead, leaving DEV_TYPE1 empty.
+			 */
+			ret = regmap_read(info->regmap, SM5502_REG_DEV_TYPE3,
+					  &dev_type3);
+			if (ret) {
+				dev_err(info->dev,
+					"failed to read DEV_TYPE3 reg\n");
+				return ret;
+			}
+
+			if (dev_type3 & SM5502_REG_DEV_TYPE3_U200_CHG_MASK) {
+				cable_type = SM5502_MUIC_ADC_OPEN_TA;
+				break;
+			}
+
 			dev_dbg(info->dev,
-				"cannot identify the cable type: adc(0x%x)\n",
-				adc);
+				"cannot identify the cable type: adc(0x%x), dev_type1(0x%x), dev_type3(0x%x)\n",
+				adc, dev_type1, dev_type3);
 			return -EINVAL;
+		}
 		}
 		break;
 	default:
