@@ -45,6 +45,7 @@ struct sm5502_muic_info {
 	int irq;
 	bool irq_attach;
 	bool irq_detach;
+	unsigned int prev_cable_type;
 	struct work_struct irq_work;
 
 	struct mutex mutex;
@@ -489,19 +490,19 @@ static unsigned int sm5502_muic_get_cable_type(struct sm5502_muic_info *info)
 static int sm5502_muic_cable_handler(struct sm5502_muic_info *info,
 				     bool attached)
 {
-	static unsigned int prev_cable_type = SM5502_MUIC_ADC_GROUND;
 	unsigned int cable_type = SM5502_MUIC_ADC_GROUND;
 	unsigned int con_sw = DM_DP_SWITCH_OPEN;
 	unsigned int vbus_sw = VBUSIN_SWITCH_OPEN;
 	unsigned int id;
 	int ret;
+	int i;
 
 	/* Get the type of attached or detached cable */
 	if (attached)
 		cable_type = sm5502_muic_get_cable_type(info);
 	else
-		cable_type = prev_cable_type;
-	prev_cable_type = cable_type;
+		cable_type = info->prev_cable_type;
+	info->prev_cable_type = cable_type;
 
 	switch (cable_type) {
 	case SM5502_MUIC_ADC_OPEN_USB:
@@ -530,6 +531,22 @@ static int sm5502_muic_cable_handler(struct sm5502_muic_info *info,
 	ret = sm5502_muic_set_path(info, con_sw, vbus_sw, attached);
 	if (ret < 0)
 		return ret;
+
+	/*
+	 * A cable type can replace another without an intervening detach,
+	 * so lower every other id this driver reports: otherwise the
+	 * previous type stays asserted and consumers see two cables at
+	 * once.
+	 */
+	for (i = 0; sm5502_extcon_cable[i] != EXTCON_NONE; i++) {
+		unsigned int cable = sm5502_extcon_cable[i];
+
+		if (cable == id ||
+		    (id == EXTCON_USB && cable == EXTCON_CHG_USB_SDP))
+			continue;
+
+		extcon_set_state_sync(info->edev, cable, false);
+	}
 
 	/* Change the state of external accessory */
 	extcon_set_state_sync(info->edev, id, attached);
