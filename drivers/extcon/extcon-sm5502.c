@@ -531,15 +531,30 @@ static void sm5502_muic_irq_work(struct work_struct *work)
 
 	mutex_lock(&info->mutex);
 
-	/* Detect attached or detached cables */
-	if (info->irq_attach) {
+	/*
+	 * Detect attached or detached cables.
+	 *
+	 * Both flags can be set in the same run, in which case replaying them
+	 * in order would leave the state of whichever came last.  Ask the
+	 * hardware instead: a negative return means nothing identifiable is
+	 * connected.  A single flag is taken as it is, because by the time
+	 * this runs the chip may still be reporting a cable that has just
+	 * been unplugged.
+	 */
+	if (info->irq_attach && info->irq_detach) {
+		bool attached;
+
+		attached = sm5502_muic_get_cable_type(info) >= 0;
+
+		ret = sm5502_muic_cable_handler(info, attached);
+	} else if (info->irq_attach) {
 		ret = sm5502_muic_cable_handler(info, true);
-		info->irq_attach = false;
-	}
-	if (info->irq_detach) {
+	} else if (info->irq_detach) {
 		ret = sm5502_muic_cable_handler(info, false);
-		info->irq_detach = false;
 	}
+
+	info->irq_attach = false;
+	info->irq_detach = false;
 
 	if (ret < 0)
 		dev_err(info->dev, "failed to handle MUIC interrupt\n");
