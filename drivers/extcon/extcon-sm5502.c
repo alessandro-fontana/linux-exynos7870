@@ -21,6 +21,11 @@
 
 #define	DELAY_MS_DEFAULT		17000	/* unit: millisecond */
 
+static bool boot_redetect = true;
+module_param(boot_redetect, bool, 0444);
+MODULE_PARM_DESC(boot_redetect,
+		 "Reset the chip in the boot-time work so a cable present at boot is classified again (drops the USB link once)");
+
 struct muic_irq {
 	unsigned int irq;
 	const char *name;
@@ -699,11 +704,58 @@ static irqreturn_t sm5502_muic_irq_handler(int irq, void *data)
 	return IRQ_HANDLED;
 }
 
+static void sm5502_init_dev_type(struct sm5502_muic_info *info);
+
 static void sm5502_muic_detect_cable_wq(struct work_struct *work)
 {
 	struct sm5502_muic_info *info = container_of(to_delayed_work(work),
 				struct sm5502_muic_info, wq_detcable);
 	int ret;
+
+	/*
+	 * The chip classifies a cable once, when it is plugged in, and never
+	 * revisits that decision.  A cable already present at boot was
+	 * therefore measured by the bootloader, under whatever configuration
+	 * it had left behind, and a charging downstream port can end up
+	 * recorded as a plain SDP one.
+	 *
+	 * Reset the chip so it measures again, now that the host has had time
+	 * to enumerate, and put the configuration back afterwards: the reset
+	 * clears the interrupt masks along with everything else.
+	 */
+	/*
+	 * The reset opens the USB switch for a moment and every USB session
+	 * open at that point drops. Where that matters more than the charging
+	 * current - a recovery sideloading an update over adb - it can be
+	 * turned off with extcon_sm5502.boot_redetect=0.
+	 */
+	if (boot_redetect) {
+		unsigned int type, prev = 0;
+		int i;
+
+		regmap_write(info->regmap, SM5502_REG_RESET, SM5502_REG_RESET_MASK);
+		sm5502_init_dev_type(info);
+
+		/*
+		 * The detection takes a while after the reset, and reading
+		 * the cable type right away races with it: the attach
+		 * interrupt that should carry the result is sometimes lost
+		 * while the configuration is being restored, and the chip
+		 * then says CDP (DEV_TYPE1 0x20) while the extcon device
+		 * keeps reporting SDP. Wait until the type is set and
+		 * stable before reporting it.
+		 */
+		for (i = 0; i < 20; i++) {
+			msleep(50);
+			if (regmap_read(info->regmap, SM5502_REG_DEV_TYPE1, &type))
+				continue;
+			if (type && type == prev)
+				break;
+			prev = type;
+		}
+		dev_dbg(info->dev, "re-detection: DEV_TYPE1 0x%02x after %d ms\n",
+			prev, (i + 1) * 50);
+	}
 
 	/* Notify the state of connector cable or not  */
 	ret = sm5502_muic_cable_handler(info, true);
