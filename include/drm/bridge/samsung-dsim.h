@@ -60,6 +60,7 @@ struct samsung_dsim_driver_data {
 	unsigned int has_broken_fifoctrl_emptyhdr:1;
 	unsigned int has_sfrctrl:1;
 	unsigned int has_pixel_porch:1;
+	unsigned int clklane_stop_only:1;
 	struct clk_bulk_data *clk_data;
 	unsigned int num_clks;
 	unsigned int min_freq;
