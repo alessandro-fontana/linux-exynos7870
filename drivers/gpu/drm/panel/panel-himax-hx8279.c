@@ -872,8 +872,12 @@ static int hx8279_check_goa_config(struct hx8279 *hx, struct device *dev)
 		else
 			num_clr++;
 	}
-	if (!num_clr)
-		return -EINVAL;
+
+	/*
+	 * Leaving all of the CLR registers at their reset value is a valid
+	 * configuration: some panels only program the GOA lead/dummy timings
+	 * and rely on the DriverIC defaults for the clear signals.
+	 */
 
 	for (i = 0; i < ARRAY_SIZE(desc->goa_clr_polarity); i++) {
 		if (num_clr < 0)
