@@ -189,6 +189,9 @@
 #define DSIM_PLL_DPDNSWAP_CLK		(1 << 25)
 #define DSIM_PLL_DPDNSWAP_DAT		(1 << 24)
 #define DSIM_FREQ_BAND(x)		((x) << 24)
+
+/* Fixed stable VFP used by the variants that program porches in pixels */
+#define DSIM_STABLE_VFP_PIXEL		1
 #define DSIM_PLL_EN			BIT(23)
 #define DSIM_PLL(x, offset)		((x) << (offset))
 
@@ -619,6 +622,7 @@ static const struct samsung_dsim_driver_data exynos7870_dsi_driver_data = {
 	.plltmr_reg = 0xa0,
 	.has_clklane_stop = 1,
 	.has_sfrctrl = 1,
+	.has_pixel_porch = 1,
 	.clk_data = exynos7870_clk_bulk_data,
 	.num_clks = ARRAY_SIZE(exynos7870_clk_bulk_data),
 	.max_freq = 1500,
@@ -1176,21 +1180,39 @@ static void samsung_dsim_set_display_mode(struct samsung_dsim *dsi)
 	if (dsi->mode_flags & MIPI_DSI_MODE_VIDEO) {
 		u64 byte_clk = dsi->hs_clock / 8;
 		u64 pix_clk = m->clock * 1000;
+		int vfp = m->vsync_start - m->vdisplay;
+		int stable_vfp = vfp;
+		int cmd_allow = 0xf;
+		int hfp, hbp, hsa;
 
-		int hfp = DIV64_U64_ROUND_UP((m->hsync_start - m->hdisplay) * byte_clk, pix_clk);
-		int hbp = DIV64_U64_ROUND_UP((m->htotal - m->hsync_end) * byte_clk, pix_clk);
-		int hsa = DIV64_U64_ROUND_UP((m->hsync_end - m->hsync_start) * byte_clk, pix_clk);
+		if (dsi->driver_data->has_pixel_porch) {
+			/*
+			 * This variant takes the horizontal porches as plain
+			 * pixel counts rather than byte clocks, and wants a
+			 * fixed stable VFP with the command allow window
+			 * filling what is left of the front porch.
+			 */
+			hfp = m->hsync_start - m->hdisplay;
+			hbp = m->htotal - m->hsync_end;
+			hsa = m->hsync_end - m->hsync_start;
+			stable_vfp = DSIM_STABLE_VFP_PIXEL;
+			cmd_allow = max(vfp - stable_vfp - 2, 0);
+		} else {
+			hfp = DIV64_U64_ROUND_UP((m->hsync_start - m->hdisplay) * byte_clk, pix_clk);
+			hbp = DIV64_U64_ROUND_UP((m->htotal - m->hsync_end) * byte_clk, pix_clk);
+			hsa = DIV64_U64_ROUND_UP((m->hsync_end - m->hsync_start) * byte_clk, pix_clk);
 
-		/* remove packet overhead when possible */
-		hfp = max(hfp - 6, 0);
-		hbp = max(hbp - 6, 0);
-		hsa = max(hsa - 6, 0);
+			/* remove packet overhead when possible */
+			hfp = max(hfp - 6, 0);
+			hbp = max(hbp - 6, 0);
+			hsa = max(hsa - 6, 0);
+		}
 
 		dev_dbg(dsi->dev, "calculated hfp: %u, hbp: %u, hsa: %u",
 			hfp, hbp, hsa);
 
-		reg = DSIM_CMD_ALLOW(0xf)
-			| DSIM_STABLE_VFP(m->vsync_start - m->vdisplay)
+		reg = DSIM_CMD_ALLOW(cmd_allow)
+			| DSIM_STABLE_VFP(stable_vfp)
 			| DSIM_MAIN_VBP(m->vtotal - m->vsync_end);
 		samsung_dsim_write(dsi, DSIM_MVPORCH_REG, reg);
 
