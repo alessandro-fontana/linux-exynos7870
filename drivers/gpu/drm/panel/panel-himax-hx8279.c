@@ -25,10 +25,14 @@
  #define HX8279_PAGE_SEL		GENMASK(3, 0)
 
 /* Page 0 - Driver/Module Configuration */
+#define HX8279_P0_UNKNOWN_B6		0xb6
+#define HX8279_P0_UNKNOWN_BA		0xba
 #define HX8279_P0_VGHS			0xbf
 #define HX8279_P0_VGLS			0xc0
 #define HX8279_P0_VGPHS			0xc2
+#define HX8279_P0_VGPLS			0xc3
 #define HX8279_P0_VGNHS			0xc4
+#define HX8279_P0_VGNLS			0xc5
  #define HX8279_P0_VG_SEL		GENMASK(4, 0)
  #define HX8279_VGH_MIN_MV		8700
  #define HX8279_VGH_STEP_MV		300
@@ -202,6 +206,15 @@ struct hx8279_panel_desc {
 	unsigned int vgl_mv;
 	unsigned int vgph_mv;
 	unsigned int vgnh_mv;
+	u8 mod_unk_b6;
+	u8 mod_unk_ba;
+	/*
+	 * Raw selector values for the VGP/VGN low references: the
+	 * millivolt mapping for those two is not known, so they are
+	 * programmed verbatim.
+	 */
+	u8 vgpl_sel;
+	u8 vgnl_sel;
 
 	/* Page 1 */
 	const struct hx8279_goa_mux *gmux;
@@ -273,6 +286,20 @@ static void hx8279_set_module_config(struct hx8279 *hx,
 	/* Page 0 - Driver/Module Configuration */
 	hx8279_set_page(hx, dsi_ctx, 0);
 
+	if (desc->mod_unk_b6) {
+		cmd_set_voltage[0] = HX8279_P0_UNKNOWN_B6;
+		cmd_set_voltage[1] = desc->mod_unk_b6;
+		mipi_dsi_generic_write_multi(dsi_ctx, cmd_set_voltage,
+					     ARRAY_SIZE(cmd_set_voltage));
+	}
+
+	if (desc->mod_unk_ba) {
+		cmd_set_voltage[0] = HX8279_P0_UNKNOWN_BA;
+		cmd_set_voltage[1] = desc->mod_unk_ba;
+		mipi_dsi_generic_write_multi(dsi_ctx, cmd_set_voltage,
+					     ARRAY_SIZE(cmd_set_voltage));
+	}
+
 	if (desc->vgh_mv) {
 		cmd_set_voltage[0] = HX8279_P0_VGHS;
 		cmd_set_voltage[1] = HX8279_VGH_VOLT_SEL(desc->vgh_mv);
@@ -297,6 +324,20 @@ static void hx8279_set_module_config(struct hx8279 *hx,
 	if (desc->vgnh_mv) {
 		cmd_set_voltage[0] = HX8279_P0_VGNHS;
 		cmd_set_voltage[1] = HX8279_VGPN_VOLT_SEL(desc->vgnh_mv);
+		mipi_dsi_generic_write_multi(dsi_ctx, cmd_set_voltage,
+					     ARRAY_SIZE(cmd_set_voltage));
+	}
+
+	if (desc->vgpl_sel) {
+		cmd_set_voltage[0] = HX8279_P0_VGPLS;
+		cmd_set_voltage[1] = desc->vgpl_sel;
+		mipi_dsi_generic_write_multi(dsi_ctx, cmd_set_voltage,
+					     ARRAY_SIZE(cmd_set_voltage));
+	}
+
+	if (desc->vgnl_sel) {
+		cmd_set_voltage[0] = HX8279_P0_VGNLS;
+		cmd_set_voltage[1] = desc->vgnl_sel;
 		mipi_dsi_generic_write_multi(dsi_ctx, cmd_set_voltage,
 					     ARRAY_SIZE(cmd_set_voltage));
 	}
@@ -970,7 +1011,9 @@ static int hx8279_check_params(struct hx8279 *hx, struct device *dev)
 	int ret;
 
 	/* Voltages config validation */
-	if (!desc->vgh_mv && !desc->vgl_mv && !desc->vgph_mv && !desc->vgnh_mv)
+	if (!desc->vgh_mv && !desc->vgl_mv && !desc->vgph_mv && !desc->vgnh_mv &&
+	    !desc->vgpl_sel && !desc->vgnl_sel &&
+	    !desc->mod_unk_b6 && !desc->mod_unk_ba)
 		hx->skip_voltage_config = true;
 	else if ((desc->vgh_mv && desc->vgh_mv < HX8279_VGH_MIN_MV) ||
 		 (desc->vgl_mv && desc->vgl_mv < HX8279_VGL_MIN_MV) ||
