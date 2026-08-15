@@ -623,6 +623,7 @@ static const struct samsung_dsim_driver_data exynos7870_dsi_driver_data = {
 	.has_clklane_stop = 1,
 	.has_sfrctrl = 1,
 	.has_pixel_porch = 1,
+	.clklane_stop_only = 1,
 	.clk_data = exynos7870_clk_bulk_data,
 	.num_clks = ARRAY_SIZE(exynos7870_clk_bulk_data),
 	.max_freq = 1500,
@@ -1132,7 +1133,13 @@ static int samsung_dsim_init_link(struct samsung_dsim *dsi)
 	 */
 	if (driver_data->has_clklane_stop &&
 	    dsi->mode_flags & MIPI_DSI_CLOCK_NON_CONTINUOUS) {
-		if (!samsung_dsim_hw_is_exynos(dsi->plat_data->hw_type))
+		/*
+		 * samsung_dsim_hw_is_exynos() does not cover exynos7870,
+		 * whose vendor driver only enables the non continuous clock
+		 * in command mode; in video mode it uses clock lane stop alone.
+		 */
+		if (!samsung_dsim_hw_is_exynos(dsi->plat_data->hw_type) &&
+		    !driver_data->clklane_stop_only)
 			reg |= DSIM_NON_CONTINUOUS_CLKLANE;
 
 		reg |= DSIM_CLKLANE_STOP;
