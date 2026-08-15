@@ -284,6 +284,12 @@ struct hx8279_panel_desc {
 	const struct hx8279_digital_gamma *dgamma;
 
 	/*
+	 * Video mode flags to use instead of the defaults, for panels whose
+	 * host expects a specific video mode encoding.
+	 */
+	unsigned long video_mode_flags;
+
+	/*
 	 * Power sequencing. A zero keeps the driver defaults, which enable
 	 * both supplies at once and deassert reset with a single edge.
 	 */
@@ -1391,9 +1397,13 @@ static int hx8279_probe(struct mipi_dsi_device *dsi)
 		hx->dsi[i]->mode_flags = MIPI_DSI_CLOCK_NON_CONTINUOUS |
 					 MIPI_DSI_MODE_LPM;
 
-		if (hx->desc->mode_data[0].is_video_mode)
-			hx->dsi[i]->mode_flags |= MIPI_DSI_MODE_VIDEO |
+		if (hx->desc->mode_data[0].is_video_mode) {
+			if (hx->desc->video_mode_flags)
+				hx->dsi[i]->mode_flags |= hx->desc->video_mode_flags;
+			else
+				hx->dsi[i]->mode_flags |= MIPI_DSI_MODE_VIDEO |
 						  MIPI_DSI_MODE_VIDEO_SYNC_PULSE;
+		}
 
 		ret = devm_mipi_dsi_attach(dev, hx->dsi[i]);
 		if (ret < 0) {
@@ -1707,6 +1717,15 @@ static const struct hx8279_panel_desc boe_hx8279d_gtaxl = {
 
 	/* Digital Gamma Adjustment */
 	.dgamma = &boe_hx8279d_gtaxl_dig_gamma,
+
+	/*
+	 * Burst mode with the horizontal front porch blanking suppressed and
+	 * no sync pulses, which is what the vendor programs in video mode and
+	 * what the bootloader leaves in the DSIM config register.
+	 */
+	.video_mode_flags = MIPI_DSI_MODE_VIDEO |
+			    MIPI_DSI_MODE_VIDEO_BURST |
+			    MIPI_DSI_MODE_VIDEO_NO_HFP,
 
 	/* Power sequencing, from the vendor board file */
 	.iovcc_to_vdd_delay_ms = 10,
