@@ -135,6 +135,7 @@ struct hx8279 {
 	/* Serializes page switches between modeset and backlight updates */
 	struct mutex page_lock;
 	bool prepared;
+	bool handoff;
 	u8 last_page;
 	bool skip_voltage_config;
 	bool skip_goa_config;
@@ -876,6 +877,41 @@ static int hx8279_prepare(struct drm_panel *panel)
 	struct mipi_dsi_multi_context dsi_ctx = { .dsi = dsi };
 	int ret;
 
+	if (hx->handoff) {
+		/*
+		 * Take the regulator references so that the counts stay
+		 * balanced against unprepare(), but leave the hardware
+		 * exactly as the bootloader left it.
+		 */
+		ret = regulator_bulk_enable(ARRAY_SIZE(hx->vregs), hx->vregs);
+		if (ret)
+			return ret;
+
+		hx->handoff = false;
+
+		/*
+		 * The cold path raises MIPI_DSI_MODE_LPM further down and
+		 * it stays up for every later command. Taking this early
+		 * return without it leaves display-on and the backlight
+		 * writes going out as HS commands, and those only travel
+		 * inside the HS video stream: with scanout deliberately
+		 * not started yet, they sit in the header FIFO until the
+		 * first flush. LP escape transmission does not need video,
+		 * so use it on this path too.
+		 */
+		dsi->mode_flags |= MIPI_DSI_MODE_LPM;
+		if (hx->dsi[1])
+			hx->dsi[1]->mode_flags |= MIPI_DSI_MODE_LPM;
+
+		mutex_lock(&hx->page_lock);
+		hx->prepared = true;
+		mutex_unlock(&hx->page_lock);
+
+		dev_dbg(&dsi->dev, "panel enabled by the bootloader, leaving it as it is\n");
+
+		return 0;
+	}
+
 	if (desc->iovcc_to_vdd_delay_ms) {
 		/* Vendor order: I/O rail first, then the panel supply */
 		ret = regulator_enable(hx->vregs[1].consumer);
@@ -1288,6 +1324,27 @@ static int hx8279_probe(struct mipi_dsi_device *dsi)
 	if (IS_ERR(hx->reset_gpio))
 		return dev_err_probe(dev, PTR_ERR(hx->reset_gpio),
 				     "Failed to get reset GPIO\n");
+
+	/*
+	 * The bootloader hands over a running panel: reset deasserted and
+	 * both supplies already up. Repeating the power sequence, the reset
+	 * pulse and the whole register configuration on a live link is what
+	 * the vendor driver carefully avoids, so skip all of it for the
+	 * first modeset.
+	 *
+	 * Both conditions are needed. The reset line alone is not reliable
+	 * once the driver has released it, while the supplies are only ever
+	 * left on across a probe by the bootloader.
+	 */
+	hx->handoff = gpiod_get_value_cansleep(hx->reset_gpio) > 0 &&
+		      regulator_is_enabled(hx->vregs[0].consumer) > 0 &&
+		      regulator_is_enabled(hx->vregs[1].consumer) > 0;
+
+	dev_dbg(dev, "reset=%d vdd=%d iovcc=%d -> %s\n",
+		gpiod_get_value_cansleep(hx->reset_gpio),
+		regulator_is_enabled(hx->vregs[0].consumer),
+		regulator_is_enabled(hx->vregs[1].consumer),
+		hx->handoff ? "bootloader handoff" : "cold start");
 
 	/* If the panel is connected on two DSIs then DSI0 left, DSI1 right */
 	dsi_r = of_graph_get_remote_node(dsi->dev.of_node, 1, -1);
