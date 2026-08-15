@@ -281,6 +281,14 @@ struct hx8279_panel_desc {
 
 	/* Page 7..12 */
 	const struct hx8279_digital_gamma *dgamma;
+
+	/*
+	 * Power sequencing. A zero keeps the driver defaults, which enable
+	 * both supplies at once and deassert reset with a single edge.
+	 */
+	u16 iovcc_to_vdd_delay_ms;
+	u16 vdd_to_reset_delay_ms;
+	u16 reset_pulse_ms;
 };
 
 static inline struct hx8279 *to_hx8279(struct drm_panel *panel)
@@ -863,18 +871,48 @@ static int hx8279_enable(struct drm_panel *panel)
 static int hx8279_prepare(struct drm_panel *panel)
 {
 	struct hx8279 *hx = to_hx8279(panel);
+	const struct hx8279_panel_desc *desc = hx->desc;
 	struct mipi_dsi_device *dsi = hx->dsi[0];
 	struct mipi_dsi_multi_context dsi_ctx = { .dsi = dsi };
 	int ret;
 
-	ret = regulator_bulk_enable(ARRAY_SIZE(hx->vregs), hx->vregs);
-	if (ret)
-		return ret;
+	if (desc->iovcc_to_vdd_delay_ms) {
+		/* Vendor order: I/O rail first, then the panel supply */
+		ret = regulator_enable(hx->vregs[1].consumer);
+		if (ret)
+			return ret;
+
+		msleep(desc->iovcc_to_vdd_delay_ms);
+
+		ret = regulator_enable(hx->vregs[0].consumer);
+		if (ret) {
+			regulator_disable(hx->vregs[1].consumer);
+			return ret;
+		}
+	} else {
+		ret = regulator_bulk_enable(ARRAY_SIZE(hx->vregs), hx->vregs);
+		if (ret)
+			return ret;
+	}
 
 	gpiod_set_value_cansleep(hx->enable_gpio, 1);
-	usleep_range(5000, 6000);
-	gpiod_set_value_cansleep(hx->reset_gpio, 1);
-	usleep_range(6000, 7000);
+
+	if (desc->vdd_to_reset_delay_ms)
+		msleep(desc->vdd_to_reset_delay_ms);
+	else
+		usleep_range(5000, 6000);
+
+	if (desc->reset_pulse_ms) {
+		gpiod_set_value_cansleep(hx->reset_gpio, 1);
+		msleep(desc->reset_pulse_ms);
+		gpiod_set_value_cansleep(hx->reset_gpio, 0);
+		msleep(desc->reset_pulse_ms);
+		gpiod_set_value_cansleep(hx->reset_gpio, 1);
+		msleep(desc->reset_pulse_ms);
+	} else {
+		gpiod_set_value_cansleep(hx->reset_gpio, 1);
+		usleep_range(6000, 7000);
+	}
 
 	dsi->mode_flags |= MIPI_DSI_MODE_LPM;
 	if (hx->dsi[1])
