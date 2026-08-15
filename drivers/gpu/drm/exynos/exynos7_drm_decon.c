@@ -9,6 +9,7 @@
 
 #include <linux/clk.h>
 #include <linux/component.h>
+#include <linux/iopoll.h>
 #include <linux/kernel.h>
 #include <linux/of.h>
 #include <linux/of_address.h>
@@ -522,11 +523,49 @@ static void decon_atomic_flush(struct exynos_drm_crtc *crtc)
 	exynos_crtc_handle_event(crtc);
 }
 
+/*
+ * Bringing the block down before resetting it is not optional on this
+ * hardware: when the bootloader leaves the display running, issuing a
+ * software reset while DECON is still scanning out wedges the bus hard
+ * enough that the SoC resets. Ask for a per-frame off, wait for the
+ * block to report itself stopped, and only then reset it - which is
+ * what the vendor driver does in decon_reg_stop().
+ */
+static void decon_stop(struct decon_context *ctx)
+{
+	u32 val;
+	int ret;
+
+	if (readl(ctx->regs + VIDCON0) & VIDCON0_DECON_STOP_STATUS) {
+		val = readl(ctx->regs + VIDCON0);
+		val &= ~VIDCON0_ENVID_F;
+		writel(val, ctx->regs + VIDCON0);
+
+		val = readl(ctx->regs + DECON_UPDATE);
+		val |= DECON_UPDATE_STANDALONE_F;
+		writel(val, ctx->regs + DECON_UPDATE);
+
+		ret = readl_poll_timeout(ctx->regs + VIDCON0, val,
+					 !(val & VIDCON0_DECON_STOP_STATUS),
+					 10, 20000);
+		if (ret)
+			DRM_DEV_ERROR(ctx->dev,
+				      "timeout waiting for DECON to stop\n");
+	}
+
+	writel(VIDCON0_SWRESET, ctx->regs + VIDCON0);
+
+	ret = readl_poll_timeout(ctx->regs + VIDCON0, val,
+				 !(val & VIDCON0_SWRESET), 10, 20000);
+	if (ret)
+		DRM_DEV_ERROR(ctx->dev, "timeout waiting for DECON reset\n");
+}
+
 static void decon_init(struct decon_context *ctx)
 {
 	u32 val;
 
-	writel(VIDCON0_SWRESET, ctx->regs + VIDCON0);
+	decon_stop(ctx);
 
 	val = VIDOUTCON0_DISP_IF_0_ON;
 	if (!ctx->i80_if)
