@@ -718,6 +718,9 @@ static int hx8279_on(struct hx8279 *hx)
 
 static void hx8279_power_off(struct hx8279 *hx)
 {
+	/* The DriverIC comes back on page 0 after a power cycle */
+	hx->last_page = 0;
+
 	gpiod_set_value_cansleep(hx->reset_gpio, 0);
 	usleep_range(100, 500);
 	gpiod_set_value_cansleep(hx->enable_gpio, 0);
