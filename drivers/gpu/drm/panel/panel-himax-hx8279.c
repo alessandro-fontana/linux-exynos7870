@@ -81,8 +81,10 @@
  #define HX8279_P3_REG_GOA_TE(x)	(HX8279_P3_REG_GOA_TIMING_EVEN + x)
 #define HX8279_P3_REG_UNKNOWN_E4	0xe4
 #define HX8279_P3_REG_UNKNOWN_E5	0xe5
+#define HX8279_P3_REG_UNKNOWN_E7	0xe7
 
 /* Page 5 - MIPI */
+#define HX8279_P5_REG_EOTP		0xb1
 #define HX8279_P5_REG_TIMING		0xb3
  #define HX8279_P5_TIMING_THS_SETTLE	GENMASK(7, 5)
  #define HX8279_P5_TIMING_LHS_SETTLE	BIT(4)
@@ -238,8 +240,11 @@ struct hx8279_panel_desc {
 	int goa_clr_start_pos[4];
 	u8 goa_unk_e4;
 	u8 goa_unk_e5;
+	/* Negative means "leave at reset value" */
+	s16 goa_unk_e7;
 
 	/* Page 5 */
+	u8 eotp_ctl;
 	u8 bta_tlpx;
 	bool lhs_settle_time_by_osc25;
 	u8 ths_settle_time;
@@ -532,6 +537,13 @@ static void hx8279_set_goa_cfg(struct hx8279 *hx,
 	cmd_set_goa[1] = desc->goa_unk_e5;
 	mipi_dsi_generic_write_multi(dsi_ctx, cmd_set_goa,
 				     ARRAY_SIZE(cmd_set_goa));
+
+	if (desc->goa_unk_e7 >= 0) {
+		cmd_set_goa[0] = HX8279_P3_REG_UNKNOWN_E7;
+		cmd_set_goa[1] = desc->goa_unk_e7;
+		mipi_dsi_generic_write_multi(dsi_ctx, cmd_set_goa,
+					     ARRAY_SIZE(cmd_set_goa));
+	}
 }
 
 static void hx8279_set_mipi_cfg(struct hx8279 *hx,
@@ -544,6 +556,13 @@ static void hx8279_set_mipi_cfg(struct hx8279 *hx,
 		return;
 
 	hx8279_set_page(hx, dsi_ctx, 5);
+
+	if (desc->eotp_ctl) {
+		cmd_set_mipi[0] = HX8279_P5_REG_EOTP;
+		cmd_set_mipi[1] = desc->eotp_ctl;
+		mipi_dsi_generic_write_multi(dsi_ctx, cmd_set_mipi,
+					     ARRAY_SIZE(cmd_set_mipi));
+	}
 
 	if (desc->bta_tlpx || desc->ths_settle_time || desc->lhs_settle_time_by_osc25) {
 		cmd_set_mipi[0] = HX8279_P5_REG_TIMING;
@@ -1034,7 +1053,8 @@ static int hx8279_check_params(struct hx8279 *hx, struct device *dev)
 	/* MIPI Configuration validation */
 	if (!desc->bta_tlpx && !desc->lhs_settle_time_by_osc25 &&
 	    !desc->ths_settle_time && !desc->timing_unk_b8 &&
-	    !desc->timing_unk_bc && !desc->timing_unk_d6)
+	    !desc->timing_unk_bc && !desc->timing_unk_d6 &&
+	    !desc->eotp_ctl)
 		hx->skip_mipi_timing = true;
 
 	/* ENG/Gamma Configuration validation */
@@ -1268,6 +1288,7 @@ static const struct hx8279_panel_desc aoly_sl101pm1794fog_v15 = {
 	.goa_clr_start_pos = { 8, 9, 3, 4 },
 	.goa_unk_e4 = 0xc0,
 	.goa_unk_e5 = 0x0d,
+	.goa_unk_e7 = -1,
 
 	/* MIPI Configuration */
 	.bta_tlpx = 2,
@@ -1326,6 +1347,7 @@ static const struct hx8279_panel_desc startek_kd070fhfid078 = {
 	.goa_clr_start_pos = { 5, 10, -1, -1 },
 	.goa_unk_e4 = 0xc0,
 	.goa_unk_e5 = 0x00,
+	.goa_unk_e7 = -1,
 
 	/* MIPI Configuration */
 	.bta_tlpx = 2,
