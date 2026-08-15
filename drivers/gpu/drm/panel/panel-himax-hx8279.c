@@ -1311,6 +1311,13 @@ static int hx8279_probe(struct mipi_dsi_device *dsi)
 	hx->dsi[0] = dsi;
 	mipi_dsi_set_drvdata(dsi, hx);
 
+	/*
+	 * The whole DriverIC configuration is sent from prepare(), so the
+	 * DSI host must be up by then: without this the first transfer is
+	 * rejected with -EINVAL by hosts that check their enabled state.
+	 */
+	hx->panel.prepare_prev_first = true;
+
 	ret = hx8279_init_backlight(hx, dev);
 	if (ret)
 		return ret;
