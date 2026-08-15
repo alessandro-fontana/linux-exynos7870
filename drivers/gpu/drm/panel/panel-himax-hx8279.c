@@ -134,10 +134,13 @@ struct hx8279_panel_mode {
  * struct hx8279_goa_mux - Gate driver On Array Muxer
  * @gout_l: Mux GOA signal to GOUT Left pin
  * @gout_r: Mux GOA signal to GOUT Right pin
+ *
+ * A negative value means that the relative register is left at its
+ * reset value instead of being programmed.
  */
 struct hx8279_goa_mux {
-	u8 gout_l[20];
-	u8 gout_r[20];
+	s16 gout_l[20];
+	s16 gout_r[20];
 };
 
 /**
@@ -312,6 +315,9 @@ static void hx8279_set_gmux(struct hx8279 *hx,
 	hx8279_set_page(hx, dsi_ctx, 1);
 
 	for (i = 0; i < ARRAY_SIZE(gmux->gout_l); i++) {
+		if (gmux->gout_l[i] < 0)
+			continue;
+
 		cmd_set_gmux[0] = HX8279_P1_REG_GOUTL(i);
 		cmd_set_gmux[1] = gmux->gout_l[i];
 		mipi_dsi_generic_write_multi(dsi_ctx, cmd_set_gmux,
@@ -319,6 +325,9 @@ static void hx8279_set_gmux(struct hx8279 *hx,
 	}
 
 	for (i = 0; i < ARRAY_SIZE(gmux->gout_r); i++) {
+		if (gmux->gout_r[i] < 0)
+			continue;
+
 		cmd_set_gmux[0] = HX8279_P1_REG_GOUTR(i);
 		cmd_set_gmux[1] = gmux->gout_r[i];
 		mipi_dsi_generic_write_multi(dsi_ctx, cmd_set_gmux,
@@ -797,13 +806,24 @@ static int hx8279_check_gmux_config(struct hx8279 *hx, struct device *dev)
 	if (!gmux)
 		return 0;
 
+	/*
+	 * A negative entry means "leave the register alone". Check for it
+	 * before the range test: GENMASK() is unsigned long, so a signed
+	 * negative value would be promoted and always compare as too big.
+	 */
 	for (i = 0; i < ARRAY_SIZE(gmux->gout_l); i++) {
+		if (gmux->gout_l[i] < 0)
+			continue;
+
 		if (gmux->gout_l[i] > (HX8279_GOUT_STB | HX8279_GOUT_SEL))
 			return dev_err_probe(dev, -EINVAL,
 					     "Invalid value found in gout_l[%d]\n", i);
 	}
 
 	for (i = 0; i < ARRAY_SIZE(gmux->gout_r); i++) {
+		if (gmux->gout_r[i] < 0)
+			continue;
+
 		if (gmux->gout_r[i] > (HX8279_GOUT_STB | HX8279_GOUT_SEL))
 			return dev_err_probe(dev, -EINVAL,
 					     "Invalid value found in gout_r[%d]\n", i);
