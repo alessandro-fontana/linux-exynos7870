@@ -1022,10 +1022,16 @@ static void samsung_dsim_disable_clock(struct samsung_dsim *dsi)
 	u32 reg;
 
 	reg = samsung_dsim_read(dsi, DSIM_CLKCTRL_REG);
+	/*
+	 * Also drop the HS clock request: it is the only bit that survives
+	 * a teardown, and leaving it set on a dead link would make a later
+	 * probe believe the bootloader handed over a running display.
+	 */
 	reg &= ~(BIT(driver_data->lane_esc_clk_bit)
 		| DSIM_LANE_ESC_CLK_EN_DATA_MASK(driver_data->lane_esc_data_offset)
 		| BIT(driver_data->esc_clken_bit)
-		| BIT(driver_data->byte_clken_bit));
+		| BIT(driver_data->byte_clken_bit)
+		| BIT(driver_data->tx_req_hsclk_bit));
 	samsung_dsim_write(dsi, DSIM_CLKCTRL_REG, reg);
 
 	reg = samsung_dsim_read(dsi, DSIM_PLLCTRL_REG);
@@ -1694,6 +1700,26 @@ static void samsung_dsim_atomic_post_disable(struct drm_bridge *bridge,
 					     struct drm_atomic_commit *state)
 {
 	struct samsung_dsim *dsi = bridge_to_dsi(bridge);
+	const struct samsung_dsim_driver_data *driver_data = dsi->driver_data;
+	u32 reg;
+
+	/*
+	 * Without this the runtime PM count goes negative when the bridge
+	 * is post-disabled twice, and the register access below would then
+	 * happen with the clocks already gone.
+	 */
+	if (!(dsi->state & DSIM_STATE_ENABLED))
+		return;
+
+	/*
+	 * Drop the HS clock request while the clocks are still running: the
+	 * runtime suspend that would otherwise clear it is not guaranteed to
+	 * run, and samsung_dsim_init() reads the bit to decide whether it
+	 * inherited a live link.
+	 */
+	reg = samsung_dsim_read(dsi, DSIM_CLKCTRL_REG);
+	reg &= ~BIT(driver_data->tx_req_hsclk_bit);
+	samsung_dsim_write(dsi, DSIM_CLKCTRL_REG, reg);
 
 	dsi->state &= ~DSIM_STATE_ENABLED;
 	pm_runtime_put_sync(dsi->dev);
