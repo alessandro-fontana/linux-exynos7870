@@ -71,6 +71,7 @@ struct decon_context {
 	void __iomem			*regs;
 	unsigned long			irq_flags;
 	bool				i80_if;
+	bool				scanout_on;
 	wait_queue_head_t		wait_vsync_queue;
 	atomic_t			wait_vsync_event;
 
@@ -246,12 +247,17 @@ static void decon_commit(struct exynos_drm_crtc *crtc)
 	writel(mode->vdisplay - 1, ctx->regs + LINECNT_OP_THRESHOLD);
 
 	/*
-	 * fields of register with prefix '_F' would be updated
-	 * at vsync(same as dma start)
+	 * Scanout is deliberately not started here. The atomic helpers run
+	 * the CRTC enable before the bridge chain is brought up, so raising
+	 * ENVID at this point would have DECON pushing pixels while the DSI
+	 * panel is still being initialised: its init table would then only
+	 * drain through the per-frame LP command window and a long sequence
+	 * overruns the DSIM header FIFO. The vendor driver (decon_enable())
+	 * starts the DSIM and sends the panel tables first, and only then
+	 * calls decon_reg_start(). Scanout is started in atomic_flush(),
+	 * which exynos (commit_tail_rpm) runs after the whole pipeline is
+	 * enabled.
 	 */
-	val = VIDCON0_ENVID | VIDCON0_ENVID_F;
-	writel(val, ctx->regs + VIDCON0);
-
 	clkdiv = decon_calc_clkdiv(ctx, mode);
 	if (clkdiv > 1) {
 		val = VCLKCON1_CLKVAL_NUM_VCLK(clkdiv - 1);
@@ -513,6 +519,23 @@ static void decon_disable_plane(struct exynos_drm_crtc *crtc,
 	writel(val, ctx->regs + DECON_UPDATE);
 }
 
+static void decon_start_scanout(struct decon_context *ctx)
+{
+	u32 val;
+
+	if (ctx->scanout_on)
+		return;
+
+	val = VIDCON0_ENVID | VIDCON0_ENVID_F;
+	writel(val, ctx->regs + VIDCON0);
+
+	val = readl(ctx->regs + DECON_UPDATE);
+	val |= DECON_UPDATE_STANDALONE_F;
+	writel(val, ctx->regs + DECON_UPDATE);
+
+	ctx->scanout_on = true;
+}
+
 static void decon_atomic_flush(struct exynos_drm_crtc *crtc)
 {
 	struct decon_context *ctx = crtc->ctx;
@@ -520,6 +543,9 @@ static void decon_atomic_flush(struct exynos_drm_crtc *crtc)
 
 	for (i = 0; i < WINDOWS_NR; i++)
 		decon_shadow_protect_win(ctx, i, false);
+
+	decon_start_scanout(ctx);
+
 	exynos_crtc_handle_event(crtc);
 }
 
@@ -595,6 +621,8 @@ static void decon_atomic_enable(struct exynos_drm_crtc *crtc)
 	if (test_and_clear_bit(0, &ctx->irq_flags))
 		decon_enable_vblank(ctx->crtc);
 
+	ctx->scanout_on = false;
+
 	decon_commit(ctx->crtc);
 }
 
@@ -610,6 +638,8 @@ static void decon_atomic_disable(struct exynos_drm_crtc *crtc)
 	 */
 	for (i = 0; i < WINDOWS_NR; i++)
 		decon_disable_plane(crtc, &ctx->planes[i]);
+
+	ctx->scanout_on = false;
 
 	pm_runtime_put_sync(ctx->dev);
 }
