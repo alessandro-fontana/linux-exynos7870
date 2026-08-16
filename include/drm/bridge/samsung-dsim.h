@@ -66,6 +66,8 @@ struct samsung_dsim_driver_data {
 	unsigned int min_freq;
 	unsigned int max_freq;
 	unsigned int wait_for_hdr_fifo;
+	unsigned int hdr_fifo_empty_bit;
+	unsigned int hdr_fifo_full_bit;
 	unsigned int wait_for_reset;
 	unsigned int num_bits_resol;
 	unsigned int video_mode_bit;
