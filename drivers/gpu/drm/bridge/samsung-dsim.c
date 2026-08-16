@@ -627,7 +627,9 @@ static const struct samsung_dsim_driver_data exynos7870_dsi_driver_data = {
 	.clk_data = exynos7870_clk_bulk_data,
 	.num_clks = ARRAY_SIZE(exynos7870_clk_bulk_data),
 	.max_freq = 1500,
-	.wait_for_hdr_fifo = 0,
+	.wait_for_hdr_fifo = 1,
+	.hdr_fifo_empty_bit = 10,
+	.hdr_fifo_full_bit = 11,
 	.wait_for_reset = 1,
 	.num_bits_resol = 12,
 	.video_mode_bit = 18,
@@ -1262,16 +1264,21 @@ static void samsung_dsim_set_display_enable(struct samsung_dsim *dsi, bool enabl
 
 static int samsung_dsim_wait_for_hdr_fifo(struct samsung_dsim *dsi)
 {
+	const struct samsung_dsim_driver_data *driver_data = dsi->driver_data;
+	u32 empty = driver_data->hdr_fifo_empty_bit ?
+		BIT(driver_data->hdr_fifo_empty_bit) : DSIM_SFR_HEADER_EMPTY;
+	u32 full = driver_data->hdr_fifo_full_bit ?
+		BIT(driver_data->hdr_fifo_full_bit) : DSIM_SFR_HEADER_FULL;
 	int timeout = 2000;
 
 	do {
 		u32 reg = samsung_dsim_read(dsi, DSIM_FIFOCTRL_REG);
 
-		if (!dsi->driver_data->has_broken_fifoctrl_emptyhdr) {
-			if (reg & DSIM_SFR_HEADER_EMPTY)
+		if (!driver_data->has_broken_fifoctrl_emptyhdr) {
+			if (reg & empty)
 				return 0;
 		} else {
-			if (!(reg & DSIM_SFR_HEADER_FULL)) {
+			if (!(reg & full)) {
 				/*
 				 * Wait a little bit, so the pending data can
 				 * actually leave the FIFO to avoid overflow.
