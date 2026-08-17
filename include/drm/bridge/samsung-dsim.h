@@ -8,6 +8,7 @@
 #define __SAMSUNG_DSIM__
 
 #include <linux/gpio/consumer.h>
+#include <linux/mutex.h>
 #include <linux/regulator/consumer.h>
 
 #include <drm/drm_atomic_helper.h>
@@ -130,6 +131,7 @@ struct samsung_dsim {
 
 	spinlock_t transfer_lock; /* protects transfer_list */
 	struct list_head transfer_list;
+	struct mutex xfer_mutex; /* serializes host transfers */
 
 	const struct samsung_dsim_driver_data *driver_data;
 	const struct samsung_dsim_plat_data *plat_data;

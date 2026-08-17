@@ -2115,6 +2115,15 @@ static ssize_t samsung_dsim_host_transfer(struct mipi_dsi_host *host,
 	struct samsung_dsim_transfer xfer;
 	int ret;
 
+	/*
+	 * The transfer machinery below assumes one submitter at a time:
+	 * transfer_start() peeks the list head under transfer_lock but then
+	 * drops the lock, so two concurrent submitters (e.g. a modeset and
+	 * a backlight update) could send and complete the same entry twice
+	 * and corrupt the list.
+	 */
+	guard(mutex)(&dsi->xfer_mutex);
+
 	if (!(dsi->state & DSIM_STATE_ENABLED))
 		return -EINVAL;
 
@@ -2237,6 +2246,7 @@ int samsung_dsim_probe(struct platform_device *pdev)
 	init_completion(&dsi->completed);
 	spin_lock_init(&dsi->transfer_lock);
 	INIT_LIST_HEAD(&dsi->transfer_list);
+	mutex_init(&dsi->xfer_mutex);
 
 	dsi->dsi_host.ops = &samsung_dsim_ops;
 	dsi->dsi_host.dev = dev;
