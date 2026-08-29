@@ -193,6 +193,44 @@
 			clocks = <&oscclk>;
 		};
 
+		/*
+		 * CPU cluster CMUs; CPUCL1 is at the lower address.
+		 *
+		 * S-BOOT leaves the switch branch user mux on OSCCLK. clk-cpu
+		 * parks the cores on the switch branch while the PLL relocks,
+		 * so without this assignment they would drop to 26 MHz instead
+		 * of 800 MHz.
+		 */
+		cmu_cpucl1: clock-controller@10800000 {
+			compatible = "samsung,exynos7870-cmu-cpucl1";
+			reg = <0x10800000 0x1000>;
+			#clock-cells = <1>;
+
+			clock-names = "oscclk", "switch";
+			clocks = <&oscclk>,
+				 <&cmu_mif CLK_GOUT_MIF_CMU_CPUCL1_SWITCH>;
+
+			assigned-clocks =
+				<&cmu_cpucl1 CLK_MOUT_CPUCL1_SWITCH_USER>;
+			assigned-clock-parents =
+				<&cmu_mif CLK_GOUT_MIF_CMU_CPUCL1_SWITCH>;
+		};
+
+		cmu_cpucl0: clock-controller@10900000 {
+			compatible = "samsung,exynos7870-cmu-cpucl0";
+			reg = <0x10900000 0x1000>;
+			#clock-cells = <1>;
+
+			clock-names = "oscclk", "switch";
+			clocks = <&oscclk>,
+				 <&cmu_mif CLK_GOUT_MIF_CMU_CPUCL0_SWITCH>;
+
+			assigned-clocks =
+				<&cmu_cpucl0 CLK_MOUT_CPUCL0_SWITCH_USER>;
+			assigned-clock-parents =
+				<&cmu_mif CLK_GOUT_MIF_CMU_CPUCL0_SWITCH>;
+		};
+
 		pmu_system_controller: system-controller@10480000 {
 			compatible = "samsung,exynos7870-pmu",
 				     "samsung,exynos7-pmu", "syscon";
