@@ -528,6 +528,19 @@ static struct gpio_desc *of_find_gpio_rename(struct device_node *np,
 		{ "en",		"s3fwrn5,en-gpios",	"samsung,s3fwrn5-i2c" },
 		{ "wake",	"s3fwrn5,fw-gpios",	"samsung,s3fwrn5-i2c" },
 #endif
+#if IS_ENABLED(CONFIG_SND_SOC_RT5659)
+		/*
+		 * The rt5659 binding documents realtek,ldo1-en-gpios and
+		 * realtek,reset-gpios, but the driver requests plain
+		 * "ldo1-en" and "reset" con_ids; without this mapping the
+		 * optional lookups silently return NULL and the codec is
+		 * never powered up.
+		 */
+		{ "ldo1-en",	"realtek,ldo1-en-gpios",	"realtek,rt5659" },
+		{ "reset",	"realtek,reset-gpios",	"realtek,rt5659" },
+		{ "ldo1-en",	"realtek,ldo1-en-gpios",	"realtek,rt5658" },
+		{ "reset",	"realtek,reset-gpios",	"realtek,rt5658" },
+#endif
 #if IS_ENABLED(CONFIG_PCI_LANTIQ)
 		/* MIPS Lantiq PCI */
 		{ "reset",	"gpio-reset",	"lantiq,pci-xway" },
