@@ -1225,10 +1225,21 @@ static const struct samsung_fixed_rate_clock dispaud_fixed_clks[] __initconst = 
 	FRATE(0, "frat_dispaud_mipiphy_txbyteclkhs", NULL, 0, 188000000),
 };
 
+/*
+ * AUD_PLL is a fractional PLL1431x: M/P/S in CON0 and a 16-bit K in
+ * CON1, matching the pll_36xx register layout (K at con_reg + 4).
+ * The bootloader programs 26 MHz * (30 + 16213/65536) / 8, i.e.
+ * 98.304 MHz to within 0.2 ppm; the single rate below reproduces it.
+ */
+static const struct samsung_pll_rate_table dispaud_aud_pll_rates[] __initconst = {
+	PLL_36XX_RATE(26000000U, 98304019U, 30, 1, 3, 16213),
+	{ /* sentinel */ }
+};
+
 static const struct samsung_pll_clock dispaud_pll_clks[] __initconst = {
-	PLL(pll_1417x, CLK_FOUT_DISPAUD_AUD_PLL, "fout_dispaud_aud_pll",
+	PLL(pll_36xx, CLK_FOUT_DISPAUD_AUD_PLL, "fout_dispaud_aud_pll",
 	    "oscclk", PLL_LOCKTIME_DISPAUD_AUD_PLL, PLL_CON0_DISPAUD_AUD_PLL,
-	    NULL),
+	    dispaud_aud_pll_rates),
 	PLL(pll_1417x, CLK_FOUT_DISPAUD_PLL, "fout_dispaud_pll", "oscclk",
 	    PLL_LOCKTIME_DISPAUD_PLL, PLL_CON0_DISPAUD_PLL, NULL),
 };
