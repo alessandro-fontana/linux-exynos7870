@@ -116,6 +116,10 @@
 #define EXYNOS7_EMUL_DATA_SHIFT			7
 #define EXYNOS7_EMUL_DATA_MASK			0x1ff
 
+/* Exynos7870 specific registers (TEM1455X sensor) */
+#define EXYNOS7870_TMU_PTAT_CONT_SHIFT		18
+#define EXYNOS7870_TMU_PTAT_CONT_MASK		0x7
+
 #define EXYNOS_FIRST_POINT_TRIM			25
 #define EXYNOS_SECOND_POINT_TRIM		85
 
@@ -133,6 +137,7 @@ enum soc_type {
 	SOC_ARCH_EXYNOS5420_TRIMINFO,
 	SOC_ARCH_EXYNOS5433,
 	SOC_ARCH_EXYNOS7,
+	SOC_ARCH_EXYNOS7870,
 };
 
 /**
@@ -159,6 +164,7 @@ enum soc_type {
  *	0 < reference_voltage <= 31
  * @tzd: pointer to thermal_zone_device structure
  * @enabled: current status of TMU device
+ * @ptat_comp: apply the TEM1455X +12.5%% readout compensation (Exynos7870)
  * @tmu_set_low_temp: SoC specific method to set trip (falling threshold)
  * @tmu_set_high_temp: SoC specific method to set trip (rising threshold)
  * @tmu_set_crit_temp: SoC specific method to set critical temperature
@@ -186,6 +192,7 @@ struct exynos_tmu_data {
 	u8 reference_voltage;
 	struct thermal_zone_device *tzd;
 	bool enabled;
+	bool ptat_comp;
 
 	void (*tmu_set_low_temp)(struct exynos_tmu_data *data, u8 temp);
 	void (*tmu_set_high_temp)(struct exynos_tmu_data *data, u8 temp);
@@ -220,8 +227,15 @@ static int temp_to_code(struct exynos_tmu_data *data, u8 temp)
  */
 static int code_to_temp(struct exynos_tmu_data *data, u16 temp_code)
 {
-	if (data->cal_type == TYPE_ONE_POINT_TRIMMING)
-		return temp_code - data->temp_error1 + EXYNOS_FIRST_POINT_TRIM;
+	int temp;
+
+	if (data->cal_type == TYPE_ONE_POINT_TRIMMING) {
+		temp = temp_code - data->temp_error1 + EXYNOS_FIRST_POINT_TRIM;
+		/* TEM1455X PTAT-control quirk, see exynos7870_tmu_initialize() */
+		if (data->ptat_comp)
+			temp += temp >> 3;
+		return temp;
+	}
 
 	return (temp_code - data->temp_error1) *
 		(EXYNOS_SECOND_POINT_TRIM - EXYNOS_FIRST_POINT_TRIM) /
@@ -232,8 +246,9 @@ static int code_to_temp(struct exynos_tmu_data *data, u16 temp_code)
 static void sanitize_temp_error(struct exynos_tmu_data *data, u32 trim_info)
 {
 	u16 tmu_temp_mask =
-		(data->soc == SOC_ARCH_EXYNOS7) ? EXYNOS7_TMU_TEMP_MASK
-						: EXYNOS_TMU_TEMP_MASK;
+		(data->soc == SOC_ARCH_EXYNOS7 ||
+		 data->soc == SOC_ARCH_EXYNOS7870) ? EXYNOS7_TMU_TEMP_MASK
+						   : EXYNOS_TMU_TEMP_MASK;
 
 	data->temp_error1 = trim_info & tmu_temp_mask;
 	data->temp_error2 = ((trim_info >> EXYNOS_TRIMINFO_85_SHIFT) &
@@ -355,8 +370,9 @@ static void exynos_tmu_update_temp(struct exynos_tmu_data *data, int reg_off,
 	u32 th;
 
 	tmu_temp_mask =
-		(data->soc == SOC_ARCH_EXYNOS7) ? EXYNOS7_TMU_TEMP_MASK
-						: EXYNOS_TMU_TEMP_MASK;
+		(data->soc == SOC_ARCH_EXYNOS7 ||
+		 data->soc == SOC_ARCH_EXYNOS7870) ? EXYNOS7_TMU_TEMP_MASK
+						   : EXYNOS_TMU_TEMP_MASK;
 
 	th = readl(data->base + reg_off);
 	th &= ~(tmu_temp_mask << bit_off);
@@ -582,6 +598,21 @@ static void exynos7_tmu_initialize(struct platform_device *pdev)
 	sanitize_temp_error(data, trim_info);
 }
 
+static void exynos7870_tmu_initialize(struct platform_device *pdev)
+{
+	struct exynos_tmu_data *data = platform_get_drvdata(pdev);
+	unsigned int trim_info;
+
+	trim_info = readl(data->base + EXYNOS_TMU_REG_TRIMINFO);
+	/*
+	 * TEM1455X sensor: readouts need a +12.5% compensation when the
+	 * PTAT control OTP value is zero, as in the vendor driver.
+	 */
+	data->ptat_comp = !((trim_info >> EXYNOS7870_TMU_PTAT_CONT_SHIFT) &
+			    EXYNOS7870_TMU_PTAT_CONT_MASK);
+	sanitize_temp_error(data, trim_info);
+}
+
 static void exynos4210_tmu_control(struct platform_device *pdev, bool on)
 {
 	struct exynos_tmu_data *data = platform_get_drvdata(pdev);
@@ -633,6 +664,29 @@ static void exynos7_tmu_control(struct platform_device *pdev, bool on)
 	writel(con, data->base + EXYNOS_TMU_REG_CONTROL);
 }
 
+static void exynos7870_tmu_control(struct platform_device *pdev, bool on)
+{
+	struct exynos_tmu_data *data = platform_get_drvdata(pdev);
+	unsigned int con;
+
+	/*
+	 * On the Exynos7870 TEM1455X sensor the buffer slope and reference
+	 * voltage fields in TMU_CONTROL are OTP-managed and must be left
+	 * exactly as programmed by the bootloader: the vendor driver
+	 * explicitly skips writing them for this sensor type, and the
+	 * generic get_con_reg() values would detune the analog calibration.
+	 * Only the core enable bit is touched here.
+	 */
+	con = readl(data->base + EXYNOS_TMU_REG_CONTROL);
+
+	if (on)
+		con |= BIT(EXYNOS_TMU_CORE_EN_SHIFT);
+	else
+		con &= ~BIT(EXYNOS_TMU_CORE_EN_SHIFT);
+
+	writel(con, data->base + EXYNOS_TMU_REG_CONTROL);
+}
+
 static int exynos_get_temp(struct thermal_zone_device *tz, int *temp)
 {
 	struct exynos_tmu_data *data = thermal_zone_device_priv(tz);
@@ -671,7 +725,8 @@ static u32 get_emul_con_reg(struct exynos_tmu_data *data, unsigned int val,
 
 		val &= ~(EXYNOS_EMUL_TIME_MASK << EXYNOS_EMUL_TIME_SHIFT);
 		val |= (EXYNOS_EMUL_TIME << EXYNOS_EMUL_TIME_SHIFT);
-		if (data->soc == SOC_ARCH_EXYNOS7) {
+		if (data->soc == SOC_ARCH_EXYNOS7 ||
+		    data->soc == SOC_ARCH_EXYNOS7870) {
 			val &= ~(EXYNOS7_EMUL_DATA_MASK <<
 				EXYNOS7_EMUL_DATA_SHIFT);
 			val |= (temp_to_code(data, temp) <<
@@ -701,7 +756,8 @@ static void exynos4412_tmu_set_emulation(struct exynos_tmu_data *data,
 		emul_con = EXYNOS5260_EMUL_CON;
 	else if (data->soc == SOC_ARCH_EXYNOS5433)
 		emul_con = EXYNOS5433_TMU_EMUL_CON;
-	else if (data->soc == SOC_ARCH_EXYNOS7)
+	else if (data->soc == SOC_ARCH_EXYNOS7 ||
+		 data->soc == SOC_ARCH_EXYNOS7870)
 		emul_con = EXYNOS7_TMU_REG_EMUL_CON;
 	else
 		emul_con = EXYNOS_EMUL_CON;
@@ -782,7 +838,8 @@ static void exynos4210_tmu_clear_irqs(struct exynos_tmu_data *data)
 	if (data->soc == SOC_ARCH_EXYNOS5260) {
 		tmu_intstat = EXYNOS5260_TMU_REG_INTSTAT;
 		tmu_intclear = EXYNOS5260_TMU_REG_INTCLEAR;
-	} else if (data->soc == SOC_ARCH_EXYNOS7) {
+	} else if (data->soc == SOC_ARCH_EXYNOS7 ||
+		   data->soc == SOC_ARCH_EXYNOS7870) {
 		tmu_intstat = EXYNOS7_TMU_REG_INTPEND;
 		tmu_intclear = EXYNOS7_TMU_REG_INTPEND;
 	} else if (data->soc == SOC_ARCH_EXYNOS5433) {
@@ -833,6 +890,9 @@ static const struct of_device_id exynos_tmu_match[] = {
 	}, {
 		.compatible = "samsung,exynos7-tmu",
 		.data = (const void *)SOC_ARCH_EXYNOS7,
+	}, {
+		.compatible = "samsung,exynos7870-tmu",
+		.data = (const void *)SOC_ARCH_EXYNOS7870,
 	},
 	{ },
 };
@@ -945,6 +1005,28 @@ static int exynos_map_dt_data(struct platform_device *pdev)
 		data->min_efuse_value = 15;
 		data->max_efuse_value = 100;
 		break;
+	case SOC_ARCH_EXYNOS7870:
+		data->tmu_set_low_temp = exynos7_tmu_set_low_temp;
+		data->tmu_set_high_temp = exynos7_tmu_set_high_temp;
+		data->tmu_disable_low = exynos7_tmu_disable_low;
+		data->tmu_disable_high = exynos7_tmu_disable_high;
+		data->tmu_set_crit_temp = exynos7_tmu_set_crit_temp;
+		data->tmu_initialize = exynos7870_tmu_initialize;
+		data->tmu_control = exynos7870_tmu_control;
+		data->tmu_read = exynos7_tmu_read;
+		data->tmu_set_emulation = exynos4412_tmu_set_emulation;
+		data->tmu_clear_irqs = exynos4210_tmu_clear_irqs;
+		/*
+		 * One-point trimming at 25C with a 9-bit trim value: the
+		 * generic 8-bit sanity window would reject every valid
+		 * Exynos7870 fuse; the default is a typical trim25 value.
+		 * gain/reference_voltage are intentionally left unset:
+		 * exynos7870_tmu_control() never writes them (OTP-managed).
+		 */
+		data->efuse_value = 330;
+		data->min_efuse_value = 100;
+		data->max_efuse_value = 500;
+		break;
 	default:
 		dev_err(&pdev->dev, "Platform not supported\n");
 		return -EINVAL;
@@ -1036,6 +1118,24 @@ static int exynos_tmu_probe(struct platform_device *pdev)
 	if (ret)
 		return ret;
 
+	if (data->soc == SOC_ARCH_EXYNOS7870) {
+		struct clk_bulk_data *clks;
+
+		/*
+		 * Single TMU block behind six PERI gates (three sclk, three
+		 * APB gates). The register file dies without the CPUCL0 APB
+		 * gate, and gating a probe sclk while the block is live
+		 * hangs the interconnect, so all six are kept enabled for
+		 * the life of the device. data->clk stays NULL:
+		 * clk_enable(NULL) in the read paths is a no-op.
+		 */
+		ret = devm_clk_bulk_get_all_enabled(dev, &clks);
+		if (ret < 0)
+			return dev_err_probe(dev, ret,
+					     "Failed to enable bulk clocks\n");
+		goto clocks_ready;
+	}
+
 	data->clk = devm_clk_get(dev, "tmu_apbif");
 	if (IS_ERR(data->clk))
 		return dev_err_probe(dev, PTR_ERR(data->clk), "Failed to get clock\n");
@@ -1078,6 +1178,7 @@ static int exynos_tmu_probe(struct platform_device *pdev)
 		break;
 	}
 
+clocks_ready:
 	ret = exynos_tmu_initialize(pdev);
 	if (ret) {
 		dev_err(dev, "Failed to initialize TMU\n");
