@@ -564,6 +564,165 @@ static int exynos850_cpuclk_post_rate_change(struct clk_notifier_data *ndata,
 	return exynos850_alt_parent_set_max_rate(alt_parent, 0);
 }
 
+
+/* ---- Exynos7870 ----------------------------------------------------------- */
+
+#define E7870_MUX_SEL		BIT(12)
+#define E7870_MUX_STAT_SHIFT	12
+#define E7870_MUX_STAT_MASK	GENMASK(1, 0)
+/* MUX_STAT field reads (selected parent + 1) once the mux has stabilized */
+#define E7870_MUX_STAT_PLL	1
+#define E7870_MUX_STAT_SWITCH	2
+/* Max time for the parking divider to settle, usec */
+#define E7870_DIV_STAB_TIME	100
+/* OSCCLK clock rate, Hz */
+#define E7870_OSCCLK		(26 * MHZ)
+
+static const struct exynos_cpuclk_regs e7870_cpuclk_regs = {
+	.mux_sel	= 0x208,
+	.mux_stat	= 0x608,
+};
+
+/*
+ * Set the alternate parent rate to "rate" or less (0 selects the maximum).
+ *
+ * Exynos7870 has no divider for the CPU clock inside CMU_CPUCLx: the cores
+ * are fed straight from the CLK_CPUCLx mux output, so - as on Exynos850 -
+ * the CLKCMU_CPUCLx_SWITCH divider (in CMU_MIF on this SoC) is used to
+ * adjust the alternate parent speed. This gives the same 800/400/266/200 MHz
+ * park rates the vendor DFS driver uses (dfscpuclx_switches[]).
+ *
+ * The chain from alt_parent (MUX_CLKCMU_CPUCLx_SWITCH_USER in CMU_CPUCLx)
+ * upwards has one hop more than the Exynos850 equivalent because of the
+ * gate sitting at the CMU boundary:
+ *   user mux -> gate (CMU_MIF) -> divider (CMU_MIF) -> bus_pll/2 (800 MHz)
+ */
+static int exynos7870_alt_parent_set_max_rate(const struct clk_hw *alt_parent,
+					      unsigned long rate)
+{
+	struct clk_hw *clk_gate, *clk_div, *clk_divp;
+	unsigned long divp_rate, div_rate, div;
+	int ret;
+
+	/* Gate at the CMU_MIF boundary */
+	clk_gate = clk_hw_get_parent(alt_parent);
+	if (!clk_gate)
+		return -ENOENT;
+	/* CLKCMU_CPUCLx_SWITCH divider in CMU_MIF */
+	clk_div = clk_hw_get_parent(clk_gate);
+	if (!clk_div)
+		return -ENOENT;
+	/* Divider input clock (bus_pll/2) */
+	clk_divp = clk_hw_get_parent(clk_div);
+	if (!clk_divp)
+		return -ENOENT;
+	divp_rate = clk_hw_get_rate(clk_divp);
+	if (!divp_rate)
+		return -EINVAL;
+
+	/* Calculate new alt_parent rate for integer divider value */
+	if (rate == 0)
+		div = 1;
+	else
+		div = DIV_ROUND_UP(divp_rate, rate);
+	div_rate = DIV_ROUND_UP(divp_rate, div);
+	/* The CLKCMU_CPUCLx_SWITCH divider field is only 2 bits wide */
+	WARN_ON(div > 4);
+
+	/* alt_parent will propagate this change up to the divider */
+	ret = clk_set_rate(alt_parent->clk, div_rate);
+	if (ret)
+		return ret;
+	udelay(E7870_DIV_STAB_TIME);
+
+	return 0;
+}
+
+/* Handler for pre-rate change notification from parent clock */
+static int exynos7870_cpuclk_pre_rate_change(struct clk_notifier_data *ndata,
+					     struct exynos_cpuclk *cpuclk)
+{
+	const struct exynos_cpuclk_cfg_data *cfg_data = cpuclk->cfg;
+	const struct exynos_cpuclk_regs * const regs = cpuclk->chip->regs;
+	const struct clk_hw *alt_parent = cpuclk->alt_parent;
+	void __iomem *base = cpuclk->base;
+	unsigned long alt_prate = clk_hw_get_rate(alt_parent);
+	unsigned long flags;
+	u32 mux_reg;
+	int ret;
+
+	/* No actions are needed when switching to or from OSCCLK parent */
+	if (ndata->new_rate == E7870_OSCCLK || ndata->old_rate == E7870_OSCCLK)
+		return 0;
+
+	/*
+	 * Sanity check: the target rate must be listed in the configuration
+	 * data. The divider fields are unused on this SoC: no divider on the
+	 * CPU path is level-dependent, and the one level-dependent divider in
+	 * the ECT (HPM, an unused sensor) is deliberately left at its boot
+	 * value - see the divider comment in clk-exynos7870.c.
+	 */
+	while ((cfg_data->prate * 1000) != ndata->new_rate) {
+		if (cfg_data->prate == 0)
+			return -EINVAL;
+		cfg_data++;
+	}
+
+	/*
+	 * If the old parent clock speed is less than the clock speed of
+	 * the alternate parent, then it should be ensured that at no point
+	 * the armclk speed is more than the old_prate until the PLL relock
+	 * is complete.
+	 */
+	if (alt_prate > ndata->old_rate || ndata->old_rate > ndata->new_rate) {
+		unsigned long tmp_rate = min(ndata->old_rate, ndata->new_rate);
+
+		ret = exynos7870_alt_parent_set_max_rate(alt_parent, tmp_rate);
+		if (ret)
+			return ret;
+	}
+
+	spin_lock_irqsave(cpuclk->lock, flags);
+
+	/* Select the alternate parent */
+	mux_reg = readl(base + regs->mux_sel);
+	writel(mux_reg | E7870_MUX_SEL, base + regs->mux_sel);
+	wait_until_mux_stable(base + regs->mux_stat, E7870_MUX_STAT_SHIFT,
+			      E7870_MUX_STAT_MASK, E7870_MUX_STAT_SWITCH);
+
+	spin_unlock_irqrestore(cpuclk->lock, flags);
+
+	return 0;
+}
+
+/* Handler for post-rate change notification from parent clock */
+static int exynos7870_cpuclk_post_rate_change(struct clk_notifier_data *ndata,
+					      struct exynos_cpuclk *cpuclk)
+{
+	const struct exynos_cpuclk_regs * const regs = cpuclk->chip->regs;
+	const struct clk_hw *alt_parent = cpuclk->alt_parent;
+	void __iomem *base = cpuclk->base;
+	unsigned long flags;
+	u32 mux_reg;
+
+	/* No actions are needed when switching to or from OSCCLK parent */
+	if (ndata->new_rate == E7870_OSCCLK || ndata->old_rate == E7870_OSCCLK)
+		return 0;
+
+	spin_lock_irqsave(cpuclk->lock, flags);
+
+	/* Select main parent (PLL) for mux */
+	mux_reg = readl(base + regs->mux_sel);
+	writel(mux_reg & ~E7870_MUX_SEL, base + regs->mux_sel);
+	wait_until_mux_stable(base + regs->mux_stat, E7870_MUX_STAT_SHIFT,
+			      E7870_MUX_STAT_MASK, E7870_MUX_STAT_PLL);
+
+	spin_unlock_irqrestore(cpuclk->lock, flags);
+
+	/* Set alt_parent rate back to max */
+	return exynos7870_alt_parent_set_max_rate(alt_parent, 0);
+}
+
 /* -------------------------------------------------------------------------- */
 
 /* Common round rate callback usable for all types of CPU clocks */
@@ -637,6 +796,11 @@ static const struct exynos_cpuclk_chip exynos_clkcpu_chips[] = {
 		.regs		= &e850cl1_cpuclk_regs,
 		.pre_rate_cb	= exynos850_cpuclk_pre_rate_change,
 		.post_rate_cb	= exynos850_cpuclk_post_rate_change,
+	},
+	[CPUCLK_LAYOUT_E7870] = {
+		.regs		= &e7870_cpuclk_regs,
+		.pre_rate_cb	= exynos7870_cpuclk_pre_rate_change,
+		.post_rate_cb	= exynos7870_cpuclk_post_rate_change,
 	},
 };
 
