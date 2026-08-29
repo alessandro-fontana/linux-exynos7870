@@ -728,10 +728,18 @@ static int s3c24xx_i2c_doxfer(struct s3c24xx_i2c *i2c,
 	 * Having these next two as dev_err() makes life very
 	 * noisy when doing an i2cdetect
 	 */
-	if (time_left == 0)
+	if (time_left == 0) {
 		dev_dbg(i2c->dev, "timeout\n");
-	else if (ret != num)
+		dev_warn(i2c->dev,
+			 "timeout: IICCON=%#04x IICSTAT=%#04x IICDS=%#04x IICADD=%#04x state=%d msg_idx=%d msg_num=%d\n",
+			 readl(i2c->regs + S3C2410_IICCON),
+			 readl(i2c->regs + S3C2410_IICSTAT),
+			 readl(i2c->regs + S3C2410_IICDS),
+			 readl(i2c->regs + S3C2410_IICADD),
+			 i2c->state, i2c->msg_idx, i2c->msg_num);
+	} else if (ret != num) {
 		dev_dbg(i2c->dev, "incomplete xfer (%d)\n", ret);
+	}
 
 	/* For QUIRK_HDMIPHY, bus is already disabled */
 	if (i2c->quirks & QUIRK_HDMIPHY)
