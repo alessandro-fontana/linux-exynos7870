@@ -1122,6 +1122,18 @@ static const struct snd_soc_dapm_route samsung_i2s_dapm_routes[] = {
 	{ "Primary Capture", NULL, "Mixer DAI RX" },
 };
 
+/*
+ * Variants without QUIRK_SEC_DAI register a single DAI and therefore
+ * have no "Secondary Playback" stream; referencing it would make card
+ * instantiation fail with -ENODEV.
+ */
+static const struct snd_soc_dapm_route samsung_i2s_pri_dapm_routes[] = {
+	{ "Playback Mixer", NULL, "Primary Playback" },
+
+	{ "Mixer DAI TX", NULL, "Playback Mixer" },
+	{ "Primary Capture", NULL, "Mixer DAI RX" },
+};
+
 static const struct snd_soc_component_driver samsung_i2s_component = {
 	.name = "samsung-i2s",
 
@@ -1130,6 +1142,21 @@ static const struct snd_soc_component_driver samsung_i2s_component = {
 
 	.dapm_routes = samsung_i2s_dapm_routes,
 	.num_dapm_routes = ARRAY_SIZE(samsung_i2s_dapm_routes),
+
+	.suspend = i2s_suspend,
+	.resume = i2s_resume,
+
+	.legacy_dai_naming = 1,
+};
+
+static const struct snd_soc_component_driver samsung_i2s_pri_component = {
+	.name = "samsung-i2s",
+
+	.dapm_widgets = samsung_i2s_widgets,
+	.num_dapm_widgets = ARRAY_SIZE(samsung_i2s_widgets),
+
+	.dapm_routes = samsung_i2s_pri_dapm_routes,
+	.num_dapm_routes = ARRAY_SIZE(samsung_i2s_pri_dapm_routes),
 
 	.suspend = i2s_suspend,
 	.resume = i2s_resume,
@@ -1505,7 +1532,9 @@ static int samsung_i2s_probe(struct platform_device *pdev)
 	dev_set_drvdata(&pdev->dev, priv);
 
 	ret = devm_snd_soc_register_component(&pdev->dev,
-					&samsung_i2s_component,
+					priv->quirks & QUIRK_SEC_DAI ?
+					&samsung_i2s_component :
+					&samsung_i2s_pri_component,
 					priv->dai_drv, num_dais);
 	if (ret < 0)
 		goto err_del_sec;
