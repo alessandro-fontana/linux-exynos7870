@@ -917,6 +917,40 @@ static const struct samsung_gate_clock cpucl0_gate_clks[] __initconst = {
 	     CLK_IS_CRITICAL | CLK_SET_RATE_PARENT, 0),
 };
 
+
+/*
+ * prate values (kHz) must match the PLL rate table above; div0/div1 are
+ * unused by the Exynos7870 clk-cpu layout (no divider programming, see
+ * the divider comment above the cpucl0_div_clks table).
+ *
+ * Only the 13 usable levels are listed: the ECT DVFS block disables
+ * 2002/1924, and 1794/1690 have no valid voltage in the fused ASV table.
+ * The clk-cpu pre-rate handler rejects any rate not listed here, so this
+ * table is what keeps the CPUs off those levels.
+ */
+static const struct exynos_cpuclk_cfg_data exynos7870_cluster_clk_d[] __initconst = {
+	{ 1586000, 0, 0 },
+	{ 1482000, 0, 0 },
+	{ 1352000, 0, 0 },
+	{ 1248000, 0, 0 },
+	{ 1144000, 0, 0 },
+	{ 1014000, 0, 0 },
+	{ 902200, 0, 0 },
+	{ 838500, 0, 0 },
+	{ 756600, 0, 0 },
+	{ 676000, 0, 0 },
+	{ 546000, 0, 0 },
+	{ 448500, 0, 0 },
+	{ 342875, 0, 0 },
+	{ 0 }
+};
+
+static const struct samsung_cpu_clock cpucl0_cpu_clks[] __initconst = {
+	CPU_CLK(CLK_CLUSTER0_SCLK, "cluster0_clk", CLK_GOUT_CPUCL0_MUX,
+		CLK_MOUT_CPUCL0_SWITCH_USER, 0, 0x0, CPUCLK_LAYOUT_E7870,
+		exynos7870_cluster_clk_d),
+};
+
 static const struct samsung_cmu_info cpucl0_cmu_info __initconst = {
 	.pll_clks		= cpucl0_pll_clks,
 	.nr_pll_clks		= ARRAY_SIZE(cpucl0_pll_clks),
@@ -926,6 +960,8 @@ static const struct samsung_cmu_info cpucl0_cmu_info __initconst = {
 	.nr_div_clks		= ARRAY_SIZE(cpucl0_div_clks),
 	.gate_clks		= cpucl0_gate_clks,
 	.nr_gate_clks		= ARRAY_SIZE(cpucl0_gate_clks),
+	.cpu_clks		= cpucl0_cpu_clks,
+	.nr_cpu_clks		= ARRAY_SIZE(cpucl0_cpu_clks),
 	.clk_regs		= cpucl0_clk_regs,
 	.nr_clk_regs		= ARRAY_SIZE(cpucl0_clk_regs),
 	.nr_clk_ids		= CPUCL0_NR_CLK,
@@ -1061,6 +1097,13 @@ static const struct samsung_gate_clock cpucl1_gate_clks[] __initconst = {
 	     CLK_IS_CRITICAL | CLK_SET_RATE_PARENT, 0),
 };
 
+
+static const struct samsung_cpu_clock cpucl1_cpu_clks[] __initconst = {
+	CPU_CLK(CLK_CLUSTER1_SCLK, "cluster1_clk", CLK_GOUT_CPUCL1_MUX,
+		CLK_MOUT_CPUCL1_SWITCH_USER, 0, 0x0, CPUCLK_LAYOUT_E7870,
+		exynos7870_cluster_clk_d),
+};
+
 static const struct samsung_cmu_info cpucl1_cmu_info __initconst = {
 	.pll_clks		= cpucl1_pll_clks,
 	.nr_pll_clks		= ARRAY_SIZE(cpucl1_pll_clks),
@@ -1070,6 +1113,8 @@ static const struct samsung_cmu_info cpucl1_cmu_info __initconst = {
 	.nr_div_clks		= ARRAY_SIZE(cpucl1_div_clks),
 	.gate_clks		= cpucl1_gate_clks,
 	.nr_gate_clks		= ARRAY_SIZE(cpucl1_gate_clks),
+	.cpu_clks		= cpucl1_cpu_clks,
+	.nr_cpu_clks		= ARRAY_SIZE(cpucl1_cpu_clks),
 	.clk_regs		= cpucl1_clk_regs,
 	.nr_clk_regs		= ARRAY_SIZE(cpucl1_clk_regs),
 	.nr_clk_ids		= CPUCL1_NR_CLK,
