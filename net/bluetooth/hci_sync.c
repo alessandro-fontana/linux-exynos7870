@@ -4430,6 +4430,18 @@ static const struct hci_init_stage hci_init3[] = {
 	{}
 };
 
+/* The LE Data Length Extension feature bit is only usable if the controller
+ * actually implements the related commands. Some of them advertise the bit
+ * but answer with a malformed command complete event.
+ */
+static bool hci_le_data_len_ext_capable(struct hci_dev *hdev)
+{
+	if (hci_test_quirk(hdev, HCI_QUIRK_BROKEN_LE_DATA_LEN_EXT))
+		return false;
+
+	return !!(hdev->le_features[0] & HCI_LE_DATA_LEN_EXT);
+}
+
 static int hci_le_set_event_mask_sync(struct hci_dev *hdev)
 {
 	u8 events[8];
@@ -4452,7 +4464,7 @@ static int hci_le_set_event_mask_sync(struct hci_dev *hdev)
 	/* If the controller supports the Data Length Extension
 	 * feature, enable the corresponding event.
 	 */
-	if (hdev->le_features[0] & HCI_LE_DATA_LEN_EXT)
+	if (hci_le_data_len_ext_capable(hdev))
 		events[0] |= 0x40;	/* LE Data Length Change */
 
 	/* If the controller supports LL Privacy feature or LE Extended Adv,
@@ -4656,7 +4668,7 @@ static int hci_le_set_rpa_timeout_sync(struct hci_dev *hdev)
 /* Read LE Maximum Data Length */
 static int hci_le_read_max_data_len_sync(struct hci_dev *hdev)
 {
-	if (!(hdev->le_features[0] & HCI_LE_DATA_LEN_EXT))
+	if (!hci_le_data_len_ext_capable(hdev))
 		return 0;
 
 	return __hci_cmd_sync_status(hdev, HCI_OP_LE_READ_MAX_DATA_LEN, 0, NULL,
@@ -4666,7 +4678,7 @@ static int hci_le_read_max_data_len_sync(struct hci_dev *hdev)
 /* Read LE Suggested Default Data Length */
 static int hci_le_read_def_data_len_sync(struct hci_dev *hdev)
 {
-	if (!(hdev->le_features[0] & HCI_LE_DATA_LEN_EXT))
+	if (!hci_le_data_len_ext_capable(hdev))
 		return 0;
 
 	return __hci_cmd_sync_status(hdev, HCI_OP_LE_READ_DEF_DATA_LEN, 0, NULL,
@@ -4997,7 +5009,7 @@ static int hci_le_set_write_def_data_len_sync(struct hci_dev *hdev)
 {
 	struct hci_cp_le_write_def_data_len cp;
 
-	if (!(hdev->le_features[0] & HCI_LE_DATA_LEN_EXT))
+	if (!hci_le_data_len_ext_capable(hdev))
 		return 0;
 
 	memset(&cp, 0, sizeof(cp));
@@ -5156,7 +5168,10 @@ static const struct {
 			 "and will not be used."),
 	HCI_QUIRK_BROKEN(LE_CODED,
 			 "HCI LE Coded PHY feature bit is set, "
-			 "but its usage is not supported.")
+			 "but its usage is not supported."),
+	HCI_QUIRK_BROKEN(LE_DATA_LEN_EXT,
+			 "HCI LE Data Length Extension feature bit is set, "
+			 "but the related commands are not supported.")
 };
 
 /* This function handles hdev setup stage:
