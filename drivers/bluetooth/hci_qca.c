@@ -2074,10 +2074,24 @@ out:
 	}
 
 	/* Setup bdaddr */
-	if (soc_type == QCA_ROME)
+	if (soc_type == QCA_ROME) {
 		hu->hdev->set_bdaddr = qca_set_bdaddr_rome;
-	else
+
+		/* Some ROME NVM configurations, among them the one Samsung
+		 * ships for the QCA9377 in the Galaxy Tab A 10.1, advertise
+		 * the LE Data Length Extension feature bit but answer the
+		 * related commands with a malformed command complete event:
+		 *
+		 *   unexpected cc 0x202f length: 1 < 9
+		 *   Opcode 0x202f failed: -38
+		 *
+		 * which aborts HCI initialisation and leaves the controller
+		 * registered but never powered on.
+		 */
+		hci_set_quirk(hu->hdev, HCI_QUIRK_BROKEN_LE_DATA_LEN_EXT);
+	} else {
 		hu->hdev->set_bdaddr = qca_set_bdaddr;
+	}
 
 	if (qcadev && qcadev->support_hfp_hw_offload)
 		qca_configure_hfp_offload(hdev);

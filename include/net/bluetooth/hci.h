@@ -375,6 +375,17 @@ enum {
 	 */
 	HCI_QUIRK_BROKEN_READ_PAGE_SCAN_TYPE,
 
+	/* When this quirk is set, the LE Data Length Extension feature bit is
+	 * reported by the controller, but the related commands
+	 * (HCI_OP_LE_READ_MAX_DATA_LEN, HCI_OP_LE_READ_DEF_DATA_LEN and
+	 * HCI_OP_LE_WRITE_DEF_DATA_LEN) answer with a malformed command
+	 * complete event, which aborts initialisation with -ENOSYS.
+	 *
+	 * This quirk can be set before hci_register_dev is called or
+	 * during the hdev->setup vendor callback.
+	 */
+	HCI_QUIRK_BROKEN_LE_DATA_LEN_EXT,
+
 	__HCI_NUM_QUIRKS,
 };
 
