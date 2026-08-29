@@ -1176,9 +1176,25 @@ static const unsigned long g3d_clk_regs[] __initconst = {
 	CLK_CON_GAT_G3D_SYSREG_PCLK,
 };
 
+/*
+ * P/M/S for fout_g3d_pll, from the ECT PLL block ("G3D_PLL", type 14180).
+ * Only the levels enabled in the "dvfs_g3d" DVFS domain; 1146/1246/1300 MHz
+ * are fused off in the vendor kernel too. fout = 26 MHz * m / (p << s).
+ * Descending order, as required by samsung_pll_round_rate().
+ */
+static const struct samsung_pll_rate_table g3d_pll_rates[] __initconst = {
+	PLL_35XX_RATE(26000000U, 1001000000U, 154,  4, 0),
+	PLL_35XX_RATE(26000000U,  845000000U, 130,  4, 0),
+	PLL_35XX_RATE(26000000U,  728000000U, 112,  4, 0),
+	PLL_35XX_RATE(26000000U,  676000000U, 104,  4, 0),
+	PLL_35XX_RATE(26000000U,  545000000U, 545, 13, 1),
+	PLL_35XX_RATE(26000000U,  450000000U, 450, 13, 1),
+	PLL_35XX_RATE(26000000U,  343000000U, 343, 13, 1),
+};
+
 static const struct samsung_pll_clock g3d_pll_clks[] __initconst = {
 	PLL(pll_1417x, CLK_FOUT_G3D_PLL, "fout_g3d_pll", "oscclk",
-	    PLL_LOCKTIME_G3D_PLL, PLL_CON0_G3D_PLL, NULL),
+	    PLL_LOCKTIME_G3D_PLL, PLL_CON0_G3D_PLL, g3d_pll_rates),
 };
 
 /* List of parent clocks for muxes in CMU_G3D */
@@ -1189,14 +1205,24 @@ PNAME(mout_g3d_p)		= { "gout_g3d_mux_pll_con",
 static const struct samsung_mux_clock g3d_mux_clks[] __initconst = {
 	MUX(CLK_MOUT_G3D_SWITCH_USER, "mout_g3d_switch_user",
 	    mout_g3d_switch_user_p, CLK_CON_MUX_G3D_SWITCH_USER, 12, 1),
-	MUX(CLK_MOUT_G3D, "mout_g3d", mout_g3d_p, CLK_CON_MUX_G3D, 12, 1),
+	/*
+	 * mout_g3d propagates set_rate to the current branch (the PLL) and
+	 * never changes parent: the switch branch belongs to CMU_MIF and is
+	 * only a fallback. MUX_F keeps CLK_SET_RATE_NO_REPARENT.
+	 */
+	MUX_F(CLK_MOUT_G3D, "mout_g3d", mout_g3d_p, CLK_CON_MUX_G3D, 12, 1,
+	      CLK_SET_RATE_PARENT, 0),
 };
 
 static const struct samsung_div_clock g3d_div_clks[] __initconst = {
 	DIV(CLK_DOUT_G3D_APB, "dout_g3d_apb", "dout_g3d_bus",
 	    CLK_CON_DIV_G3D_APB, 0, 3),
-	DIV(CLK_DOUT_G3D_BUS, "dout_g3d_bus", "gout_g3d_mux",
-	    CLK_CON_DIV_G3D_BUS, 0, 3),
+	/*
+	 * dout_g3d_bus must propagate to the PLL: the ECT keeps this divider at
+	 * /1 on all ten levels (core = PLL 1:1) and the APB at a fixed /4.
+	 */
+	DIV_F(CLK_DOUT_G3D_BUS, "dout_g3d_bus", "gout_g3d_mux",
+	      CLK_CON_DIV_G3D_BUS, 0, 3, CLK_SET_RATE_PARENT, 0),
 };
 
 static const struct samsung_gate_clock g3d_gate_clks[] __initconst = {
