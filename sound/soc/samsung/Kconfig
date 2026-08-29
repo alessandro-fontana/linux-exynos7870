@@ -21,6 +21,16 @@ config SND_SAMSUNG_SPDIF
 config SND_SAMSUNG_I2S
 	tristate "Samsung I2S interface support"
 
+config SND_SOC_SAMSUNG_S1402X
+	tristate "Samsung s1402x audio mixer support"
+
+config SND_SOC_SAMSUNG_GTAXL_RT5659
+	tristate "Audio support for gtaxl tablets with RT5659"
+	depends on I2C
+	select SND_SAMSUNG_I2S
+	select SND_SOC_SAMSUNG_S1402X
+	select SND_SOC_RT5659
+
 config SND_SOC_SAMSUNG_SMDK_WM8994
 	tristate "SoC I2S Audio support for WM8994 on SMDK"
 	depends on I2C=y
