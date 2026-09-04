@@ -19,6 +19,7 @@
 #include <video/of_display_timing.h>
 #include <video/of_videomode.h>
 
+#include <drm/drm_blend.h>
 #include <drm/drm_fourcc.h>
 #include <drm/drm_framebuffer.h>
 #include <drm/drm_print.h>
@@ -309,6 +310,80 @@ static void decon_disable_vblank(struct exynos_drm_crtc *crtc)
 	}
 }
 
+static void decon_win_set_bldeq(struct decon_context *ctx, unsigned int win,
+				unsigned int alpha, unsigned int pixel_alpha)
+{
+	u32 val;
+
+	/* Window 0 is the bottom-most layer and has no blending equation. */
+	if (win == 0)
+		return;
+
+	switch (pixel_alpha) {
+	case DRM_MODE_BLEND_PIXEL_NONE:
+	case DRM_MODE_BLEND_COVERAGE:
+		val = BLENDE_A_FUNC(BLENDE_COEF_ALPHA_A) |
+		      BLENDE_B_FUNC(BLENDE_COEF_ONE_MINUS_ALPHA_A);
+		break;
+	case DRM_MODE_BLEND_PREMULTI:
+	default:
+		if (alpha != DRM_BLEND_ALPHA_OPAQUE)
+			val = BLENDE_A_FUNC(BLENDE_COEF_ALPHA0) |
+			      BLENDE_B_FUNC(BLENDE_COEF_ONE_MINUS_ALPHA_A);
+		else
+			val = BLENDE_A_FUNC(BLENDE_COEF_ONE) |
+			      BLENDE_B_FUNC(BLENDE_COEF_ONE_MINUS_ALPHA_A);
+		break;
+	}
+
+	writel(val, ctx->regs + BLENDE(win - 1));
+}
+
+static void decon_win_set_bldmod(struct decon_context *ctx, unsigned int win,
+				 unsigned int alpha, unsigned int pixel_alpha)
+{
+	u32 win_alpha = alpha >> 8;
+	u32 mask = WINCONx_BLD_PIX | WINCONx_ALPHA_MUL | WINCONx_ALPHA_SEL;
+	u32 val;
+
+	val = readl(ctx->regs + WINCON(win));
+	val &= ~mask;
+
+	switch (pixel_alpha) {
+	case DRM_MODE_BLEND_PIXEL_NONE:
+		val |= WINCONx_BLD_PLANE;
+		break;
+	case DRM_MODE_BLEND_COVERAGE:
+	case DRM_MODE_BLEND_PREMULTI:
+	default:
+		val |= WINCONx_BLD_PIX | WINCONx_ALPHA_SEL;
+		/*
+		 * ALPHA_MUL multiplies the per-pixel alpha by the plane alpha
+		 * held in VIDOSD_C, which is written as zero for an opaque
+		 * plane: only set it when a plane alpha is in use, otherwise
+		 * the window is added to the layers below instead of being
+		 * blended over them.
+		 */
+		if (alpha != DRM_BLEND_ALPHA_OPAQUE)
+			val |= WINCONx_ALPHA_MUL;
+		break;
+	}
+
+	writel(val, ctx->regs + WINCON(win));
+
+	if (alpha != DRM_BLEND_ALPHA_OPAQUE) {
+		val = VIDOSDxC_ALPHA0_R_F(win_alpha) |
+		      VIDOSDxC_ALPHA0_G_F(win_alpha) |
+		      VIDOSDxC_ALPHA0_B_F(win_alpha);
+		writel(val, ctx->regs + VIDOSD_C(win));
+
+		val = readl(ctx->regs + BLENDCON);
+		val &= ~BLENDCON_NEW_MASK;
+		val |= BLENDCON_NEW_8BIT_ALPHA_VALUE;
+		writel(val, ctx->regs + BLENDCON);
+	}
+}
+
 static void decon_win_set_pixfmt(struct decon_context *ctx, unsigned int win,
 				 struct drm_framebuffer *fb)
 {
@@ -341,24 +416,20 @@ static void decon_win_set_pixfmt(struct decon_context *ctx, unsigned int win,
 		val |= WINCONx_BURSTLEN_16WORD(shift);
 		break;
 	case DRM_FORMAT_ARGB8888:
-		val |= WINCONx_BPPMODE_32BPP_ARGB | WINCONx_BLD_PIX |
-			WINCONx_ALPHA_SEL;
+		val |= WINCONx_BPPMODE_32BPP_ARGB;
 		val |= WINCONx_BURSTLEN_16WORD(shift);
 		break;
 	case DRM_FORMAT_ABGR8888:
-		val |= WINCONx_BPPMODE_32BPP_ABGR | WINCONx_BLD_PIX |
-			WINCONx_ALPHA_SEL;
+		val |= WINCONx_BPPMODE_32BPP_ABGR;
 		val |= WINCONx_BURSTLEN_16WORD(shift);
 		break;
 	case DRM_FORMAT_RGBA8888:
-		val |= WINCONx_BPPMODE_32BPP_RGBA | WINCONx_BLD_PIX |
-			WINCONx_ALPHA_SEL;
+		val |= WINCONx_BPPMODE_32BPP_RGBA;
 		val |= WINCONx_BURSTLEN_16WORD(shift);
 		break;
 	case DRM_FORMAT_BGRA8888:
 	default:
-		val |= WINCONx_BPPMODE_32BPP_BGRA | WINCONx_BLD_PIX |
-			WINCONx_ALPHA_SEL;
+		val |= WINCONx_BPPMODE_32BPP_BGRA;
 		val |= WINCONx_BURSTLEN_16WORD(shift);
 		break;
 	}
@@ -419,6 +490,7 @@ static void decon_update_plane(struct exynos_drm_crtc *crtc,
 	unsigned int cpp = fb->format->cpp[0];
 	unsigned int pitch = fb->pitches[0];
 	unsigned int vidw_addr0_base = ctx->data->vidw_buf_start_base;
+	unsigned int pixel_alpha;
 
 	/*
 	 * SHADOWCON/PRTCON register is used for enabling timing.
@@ -479,6 +551,14 @@ static void decon_update_plane(struct exynos_drm_crtc *crtc,
 			VIDOSDxD_ALPHA1_B_F(0xff);
 
 	writel(alpha, ctx->regs + VIDOSD_D(win));
+
+	if (fb->format->has_alpha)
+		pixel_alpha = state->base.pixel_blend_mode;
+	else
+		pixel_alpha = DRM_MODE_BLEND_PIXEL_NONE;
+
+	decon_win_set_bldmod(ctx, win, state->base.alpha, pixel_alpha);
+	decon_win_set_bldeq(ctx, win, state->base.alpha, pixel_alpha);
 
 	decon_win_set_pixfmt(ctx, win, fb);
 
@@ -708,6 +788,14 @@ static int decon_bind(struct device *dev, struct device *master, void *data)
 		ctx->configs[i].num_pixel_formats = ARRAY_SIZE(decon_formats);
 		ctx->configs[i].zpos = i;
 		ctx->configs[i].type = decon_win_types[i];
+		/*
+		 * Window 0 is the bottom-most layer: it has no blending
+		 * equation register and is always opaque.
+		 */
+		if (i > 0)
+			ctx->configs[i].capabilities =
+				EXYNOS_DRM_PLANE_CAP_WIN_BLEND |
+				EXYNOS_DRM_PLANE_CAP_PIX_BLEND;
 
 		ret = exynos_plane_init(drm_dev, &ctx->planes[i], i,
 					&ctx->configs[i]);
