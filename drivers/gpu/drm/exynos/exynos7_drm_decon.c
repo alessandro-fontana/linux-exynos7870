@@ -671,6 +671,7 @@ static void decon_stop(struct decon_context *ctx)
 static void decon_init(struct decon_context *ctx)
 {
 	u32 val;
+	unsigned int win;
 
 	decon_stop(ctx);
 
@@ -683,6 +684,28 @@ static void decon_init(struct decon_context *ctx)
 
 	if (!ctx->i80_if)
 		writel(VIDCON1_VCLK_HOLD, ctx->regs + VIDCON1(0));
+
+	/*
+	 * Use 8-bit alpha values throughout, as the vendor driver does right
+	 * after the reset: in the legacy 4-bit mode the per-pixel alpha of
+	 * an ARGB8888 window is not interpreted as 8-bit coverage.
+	 */
+	val = readl(ctx->regs + BLENDCON);
+	val &= ~BLENDCON_NEW_MASK;
+	val |= BLENDCON_NEW_8BIT_ALPHA_VALUE;
+	writel(val, ctx->regs + BLENDCON);
+
+	/*
+	 * Map every window to its own DMA channel. The Exynos7870 DECON has
+	 * three channels (0..2) and the vendor driver programs window N to
+	 * channel N (IDMA_G2/G0/G1 in its naming).
+	 */
+	val = readl(ctx->regs + WINCHMAP0);
+	for (win = 0; win < WINDOWS_NR; win++) {
+		val &= ~WINCHMAP_MASK(win);
+		val |= WINCHMAP_DMA(win, win);
+	}
+	writel(val, ctx->regs + WINCHMAP0);
 }
 
 static void decon_atomic_enable(struct exynos_drm_crtc *crtc)

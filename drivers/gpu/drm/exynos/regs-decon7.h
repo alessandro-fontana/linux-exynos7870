@@ -45,6 +45,11 @@
 #define VCLKCON1_CLKVAL_NUM_VCLK(val)		(((val) & 0xff) << 0)
 #define VCLKCON2				0x18
 
+/* WINCHMAP0: DMA channel of each window, 4 bits per window */
+#define WINCHMAP0				0x40
+#define WINCHMAP_MASK(_win)			(0x7 << ((_win) * 4))
+#define WINCHMAP_DMA(_ch, _win)			((_ch) << ((_win) * 4))
+
 /* SHADOWCON */
 #define SHADOWCON				0x30
 
