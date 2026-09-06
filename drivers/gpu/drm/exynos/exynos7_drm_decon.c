@@ -105,10 +105,14 @@ static const uint32_t decon_formats[] = {
 	DRM_FORMAT_BGRA8888,
 };
 
+/*
+ * All three windows are full-size and have their own DMA channel; none
+ * of them is a hardware cursor, so window 2 is exposed as an overlay.
+ */
 static const enum drm_plane_type decon_win_types[WINDOWS_NR] = {
 	DRM_PLANE_TYPE_PRIMARY,
 	DRM_PLANE_TYPE_OVERLAY,
-	DRM_PLANE_TYPE_CURSOR,
+	DRM_PLANE_TYPE_OVERLAY,
 };
 
 /**
