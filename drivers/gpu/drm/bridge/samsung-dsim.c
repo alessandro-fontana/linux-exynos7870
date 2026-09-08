@@ -861,7 +861,10 @@ static unsigned long samsung_dsim_set_pll(struct samsung_dsim *dsi,
 	timeout = 3000;
 	do {
 		if (timeout-- == 0) {
-			dev_err(dsi->dev, "PLL failed to stabilize\n");
+			dev_err(dsi->dev,
+				"PLL failed to stabilize: pllctrl %08x status %08x plltmr %08x\n",
+				samsung_dsim_read(dsi, DSIM_PLLCTRL_REG), reg,
+				readl(dsi->reg_base + driver_data->plltmr_reg));
 			return 0;
 		}
 		if (driver_data->has_legacy_status_reg)
@@ -1660,6 +1663,7 @@ static void samsung_dsim_disable_irq(struct samsung_dsim *dsi)
 static int samsung_dsim_init(struct samsung_dsim *dsi)
 {
 	const struct samsung_dsim_driver_data *driver_data = dsi->driver_data;
+	int ret;
 
 	if (dsi->state & DSIM_STATE_INITIALIZED)
 		return 0;
@@ -1670,7 +1674,13 @@ static int samsung_dsim_init(struct samsung_dsim *dsi)
 	if (driver_data->reg_values[RESET_TYPE] == DSIM_FUNCRST)
 		samsung_dsim_enable_lane(dsi, BIT(dsi->lanes) - 1);
 
-	samsung_dsim_enable_clock(dsi);
+	ret = samsung_dsim_enable_clock(dsi);
+	if (ret) {
+		dev_err(dsi->dev, "link init aborted, PLL not locked (%d)\n", ret);
+		samsung_dsim_disable_irq(dsi);
+		return ret;
+	}
+
 	if (driver_data->wait_for_reset)
 		samsung_dsim_wait_for_reset(dsi);
 	samsung_dsim_set_phy_ctrl(dsi);
