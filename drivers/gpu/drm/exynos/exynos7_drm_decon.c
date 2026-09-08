@@ -75,6 +75,7 @@ struct decon_context {
 	bool				scanout_on;
 	wait_queue_head_t		wait_vsync_queue;
 	atomic_t			wait_vsync_event;
+	unsigned long			underrun_count;
 
 	const struct decon_data *data;
 	struct drm_encoder *encoder;
@@ -290,6 +291,9 @@ static int decon_enable_vblank(struct exynos_drm_crtc *crtc)
 			val |= VIDINTCON0_INT_FRAME;
 			val &= ~VIDINTCON0_FRAMESEL0_MASK;
 			val |= VIDINTCON0_FRAMESEL0_VSYNC;
+			val |= VIDINTCON0_INT_FIFO;
+			val &= ~VIDINTCON0_FIFOLEVEL_MASK;
+			val |= VIDINTCON0_FIFOLEVEL_EMPTY;
 		}
 
 		writel(val, ctx->regs + VIDINTCON0);
@@ -774,6 +778,14 @@ static irqreturn_t decon_irq_handler(int irq, void *dev_id)
 	clear_bit = ctx->i80_if ? VIDINTCON1_INT_I80 : VIDINTCON1_INT_FRAME;
 	if (val & clear_bit)
 		writel(clear_bit, ctx->regs + VIDINTCON1);
+
+	if (val & VIDINTCON1_INT_FIFO) {
+		writel(VIDINTCON1_INT_FIFO, ctx->regs + VIDINTCON1);
+		ctx->underrun_count++;
+		dev_err_ratelimited(ctx->dev,
+				    "FIFO underrun (%lu total)\n",
+				    ctx->underrun_count);
+	}
 
 	/* check the crtc is detached already from encoder */
 	if (!ctx->drm_dev)
