@@ -1519,58 +1519,36 @@ static bool samsung_dsim_transfer_finish(struct samsung_dsim *dsi)
 	xfer = list_first_entry(&dsi->transfer_list,
 				struct samsung_dsim_transfer, list);
 
-	spin_unlock_irqrestore(&dsi->transfer_lock, flags);
-
+	/*
+	 * Keep the lock until the transfer is either completed or left on
+	 * the list: the xfer lives on the submitter's stack, which may
+	 * time out and return meanwhile. Nothing below sleeps.
+	 */
 	dev_dbg(dsi->dev,
 		"> xfer %p, tx_len %zu, tx_done %u, rx_len %u, rx_done %u\n",
 		xfer, xfer->packet.payload_length, xfer->tx_done, xfer->rx_len,
 		xfer->rx_done);
 
 	if (xfer->tx_done != xfer->packet.payload_length)
-		return true;
+		goto out_unlock;
 
 	if (xfer->rx_done != xfer->rx_len)
 		samsung_dsim_read_from_fifo(dsi, xfer);
 
 	if (xfer->rx_done != xfer->rx_len)
-		return true;
-
-	spin_lock_irqsave(&dsi->transfer_lock, flags);
+		goto out_unlock;
 
 	list_del_init(&xfer->list);
 	start = !list_empty(&dsi->transfer_list);
-
-	spin_unlock_irqrestore(&dsi->transfer_lock, flags);
 
 	if (!xfer->rx_len)
 		xfer->result = 0;
 	complete(&xfer->completed);
 
-	return start;
-}
-
-static void samsung_dsim_remove_transfer(struct samsung_dsim *dsi,
-					 struct samsung_dsim_transfer *xfer)
-{
-	unsigned long flags;
-	bool start;
-
-	spin_lock_irqsave(&dsi->transfer_lock, flags);
-
-	if (!list_empty(&dsi->transfer_list) &&
-	    xfer == list_first_entry(&dsi->transfer_list,
-				     struct samsung_dsim_transfer, list)) {
-		list_del_init(&xfer->list);
-		start = !list_empty(&dsi->transfer_list);
-		spin_unlock_irqrestore(&dsi->transfer_lock, flags);
-		if (start)
-			samsung_dsim_transfer_start(dsi);
-		return;
-	}
-
-	list_del_init(&xfer->list);
-
+out_unlock:
 	spin_unlock_irqrestore(&dsi->transfer_lock, flags);
+
+	return start;
 }
 
 static int samsung_dsim_transfer(struct samsung_dsim *dsi,
@@ -1596,14 +1574,28 @@ static int samsung_dsim_transfer(struct samsung_dsim *dsi,
 
 	wait_for_completion_timeout(&xfer->completed,
 				    msecs_to_jiffies(DSI_XFER_TIMEOUT_MS));
-	if (xfer->result == -ETIMEDOUT) {
+
+	/*
+	 * Decide under the lock: if the xfer is still queued nobody has
+	 * finished it and it is ours to drop; if it is not, the irq thread
+	 * completed it under the same lock and result is valid, however the
+	 * wait ended.
+	 */
+	spin_lock_irqsave(&dsi->transfer_lock, flags);
+	if (!list_empty(&xfer->list)) {
 		struct mipi_dsi_packet *pkt = &xfer->packet;
 
-		samsung_dsim_remove_transfer(dsi, xfer);
+		list_del_init(&xfer->list);
+		stopped = list_empty(&dsi->transfer_list);
+		spin_unlock_irqrestore(&dsi->transfer_lock, flags);
+
+		if (!stopped)
+			samsung_dsim_transfer_start(dsi);
 		dev_err(dsi->dev, "xfer timed out: %*ph %*ph\n", 4, pkt->header,
 			(int)pkt->payload_length, pkt->payload);
 		return -ETIMEDOUT;
 	}
+	spin_unlock_irqrestore(&dsi->transfer_lock, flags);
 
 	/* Also covers hardware timeout condition */
 	return xfer->result;
