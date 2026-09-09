@@ -48,6 +48,12 @@ struct mipi_phy_device_desc {
 		u32 resetn_val;
 		unsigned int resetn_reg;
 		enum exynos_mipi_phy_regmap_id resetn_map;
+		/*
+		 * Drop the PMU isolation first and pulse the reset after it,
+		 * the way the vendor driver sequences these PHYs; the default
+		 * releases the reset while the PHY is still isolated.
+		 */
+		bool enable_before_reset;
 	} phys[EXYNOS_MIPI_PHYS_NUM];
 };
 
@@ -240,6 +246,7 @@ static const struct mipi_phy_device_desc exynos7870_mipi_phy = {
 			.resetn_val = BIT(0),
 			.resetn_reg = 0,
 			.resetn_map = EXYNOS_MIPI_REGMAP_DISP,
+			.enable_before_reset = true,
 		}, {
 			/* EXYNOS_MIPI_PHY_ID_CSIS1 */
 			.coupled_phy_id = EXYNOS_MIPI_PHY_ID_NONE,
@@ -280,6 +287,36 @@ static int __set_phy_state(const struct exynos_mipi_phy_desc *data,
 	struct regmap *resetn_map = state->regmaps[data->resetn_map];
 
 	spin_lock(&state->slock);
+
+	if (data->enable_before_reset) {
+		/*
+		 * Vendor order (phy-exynos-mipi.c, __set_phy_alone): on the
+		 * way up bypass the isolation, then assert and release the
+		 * reset; on the way down hold the reset, then isolate. The
+		 * generic order below releases the reset while the PHY is
+		 * still isolated, so it powers up without one: on exynos7870
+		 * the DSI PLL then locks only sometimes, and the DSIM link
+		 * registers clocked from the PHY hang the bus when touched.
+		 */
+		if (on) {
+			regmap_update_bits(enable_map, data->enable_reg,
+					   data->enable_val, data->enable_val);
+			regmap_update_bits(resetn_map, data->resetn_reg,
+					   data->resetn_val, 0);
+			regmap_update_bits(resetn_map, data->resetn_reg,
+					   data->resetn_val, data->resetn_val);
+		} else {
+			regmap_update_bits(resetn_map, data->resetn_reg,
+					   data->resetn_val, 0);
+			if (data->coupled_phy_id < 0 ||
+			    state->phys[data->coupled_phy_id].phy->power_count == 0)
+				regmap_update_bits(enable_map, data->enable_reg,
+						   data->enable_val, 0);
+		}
+
+		spin_unlock(&state->slock);
+		return 0;
+	}
 
 	/* disable in PMU sysreg */
 	if (!on && data->coupled_phy_id >= 0 &&
