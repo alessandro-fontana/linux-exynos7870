@@ -718,12 +718,13 @@ static inline u32 samsung_dsim_read(struct samsung_dsim *dsi, enum reg_idx idx)
 	return readl(dsi->reg_base + dsi->driver_data->reg_ofs[idx]);
 }
 
-static void samsung_dsim_wait_for_reset(struct samsung_dsim *dsi)
+static int samsung_dsim_wait_for_reset(struct samsung_dsim *dsi)
 {
 	if (wait_for_completion_timeout(&dsi->completed, msecs_to_jiffies(300)))
-		return;
+		return 0;
 
 	dev_err(dsi->dev, "timeout waiting for reset\n");
+	return -ETIMEDOUT;
 }
 
 static void samsung_dsim_reset(struct samsung_dsim *dsi)
@@ -1671,6 +1672,20 @@ static int samsung_dsim_init(struct samsung_dsim *dsi)
 	samsung_dsim_reset(dsi);
 	samsung_dsim_enable_irq(dsi);
 
+	/*
+	 * Wait for the software reset to be released before touching any
+	 * other register: while the block is still in reset, PLL writes are
+	 * dropped and register accesses may end in an SError.
+	 */
+	if (driver_data->wait_for_reset) {
+		ret = samsung_dsim_wait_for_reset(dsi);
+		if (ret) {
+			dev_err(dsi->dev, "link init aborted, reset not released\n");
+			samsung_dsim_disable_irq(dsi);
+			return ret;
+		}
+	}
+
 	if (driver_data->reg_values[RESET_TYPE] == DSIM_FUNCRST)
 		samsung_dsim_enable_lane(dsi, BIT(dsi->lanes) - 1);
 
@@ -1681,8 +1696,6 @@ static int samsung_dsim_init(struct samsung_dsim *dsi)
 		return ret;
 	}
 
-	if (driver_data->wait_for_reset)
-		samsung_dsim_wait_for_reset(dsi);
 	samsung_dsim_set_phy_ctrl(dsi);
 	samsung_dsim_init_link(dsi);
 
