@@ -859,6 +859,11 @@ static unsigned long samsung_dsim_set_pll(struct samsung_dsim *dsi,
 
 	samsung_dsim_write(dsi, DSIM_PLLCTRL_REG, reg);
 
+	/*
+	 * PLLTMR is the lock time the hardware waits for before it raises
+	 * PLL_STABLE: 80000 cycles of the 26 MHz reference on exynos7870,
+	 * about 3 ms. Poll with real time in between rather than spinning.
+	 */
 	timeout = 3000;
 	do {
 		if (timeout-- == 0) {
@@ -872,7 +877,12 @@ static unsigned long samsung_dsim_set_pll(struct samsung_dsim *dsi,
 			reg = samsung_dsim_read(dsi, DSIM_STATUS_REG);
 		else
 			reg = samsung_dsim_read(dsi, DSIM_LINK_STATUS_REG);
-	} while ((reg & BIT(driver_data->pll_stable_bit)) == 0);
+		if (reg & BIT(driver_data->pll_stable_bit))
+			break;
+		usleep_range(10, 20);
+	} while (1);
+
+	dev_dbg(dsi->dev, "PLL locked after %d polls\n", 3000 - timeout);
 
 	dsi->hs_clock = fout;
 
