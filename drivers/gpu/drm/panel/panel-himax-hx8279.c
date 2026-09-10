@@ -215,6 +215,16 @@ struct hx8279_digital_gamma {
 	u8 b[HX8279_PG_DGAMMA_NUM_LO_BYTES + HX8279_PG_DGAMMA_NUM_HI_BYTES];
 };
 
+/**
+ * struct hx8279_goa_reg - One page 3 register as the vendor writes it
+ * @reg: Register address on page 3
+ * @val: Value to write
+ */
+struct hx8279_goa_reg {
+	u8 reg;
+	u8 val;
+};
+
 struct hx8279_panel_desc {
 	const struct mipi_dsi_device_info dsi_info;
 	const struct hx8279_panel_mode *mode_data;
@@ -241,6 +251,15 @@ struct hx8279_panel_desc {
 
 	/* Page 2 */
 	const struct hx8279_analog_gamma *agamma;
+
+	/*
+	 * Page 3, written verbatim. When set, the computed GOA
+	 * configuration below is left out entirely: leaving every field
+	 * of it at zero makes hx8279_check_params() raise both skip
+	 * flags, so only these registers reach the panel.
+	 */
+	const struct hx8279_goa_reg *goa_raw;
+	u8 num_goa_raw;
 
 	/* Page 3 */
 	u8 goa_unk_ba;
@@ -446,6 +465,26 @@ static void hx8279_set_analog_gamma(struct hx8279 *hx,
 		cmd_set_ana_gamma[1] = agamma->neg[i];
 		mipi_dsi_generic_write_multi(dsi_ctx, cmd_set_ana_gamma,
 					     ARRAY_SIZE(cmd_set_ana_gamma));
+	}
+}
+
+static void hx8279_set_goa_raw(struct hx8279 *hx,
+			       struct mipi_dsi_multi_context *dsi_ctx)
+{
+	const struct hx8279_panel_desc *desc = hx->desc;
+	u8 cmd_set_goa[2];
+	int i;
+
+	if (!desc->goa_raw)
+		return;
+
+	hx8279_set_page(hx, dsi_ctx, 3);
+
+	for (i = 0; i < desc->num_goa_raw; i++) {
+		cmd_set_goa[0] = desc->goa_raw[i].reg;
+		cmd_set_goa[1] = desc->goa_raw[i].val;
+		mipi_dsi_generic_write_multi(dsi_ctx, cmd_set_goa,
+					     ARRAY_SIZE(cmd_set_goa));
 	}
 }
 
@@ -828,6 +867,7 @@ static int hx8279_on(struct hx8279 *hx)
 	hx8279_set_analog_gamma(hx, &dsi_ctx);
 
 	/* Page 3 */
+	hx8279_set_goa_raw(hx, &dsi_ctx);
 	hx8279_set_goa_cfg(hx, &dsi_ctx);
 	hx8279_set_goa_timing(hx, &dsi_ctx);
 
@@ -1699,6 +1739,16 @@ static const struct hx8279_digital_gamma boe_hx8279d_gtaxl_dig_gamma = {
 	       0xa5, 0xaf, 0xb5, 0xb8, 0x00, 0x00, 0x05, 0x6b, 0xff, 0xff },
 };
 
+static const struct hx8279_goa_reg boe_hx8279d_gtaxl_goa[] = {
+	{ 0xc5, 0x2c },	/* GOA_TO(3) */
+	{ 0xde, 0x2c },	/* GOA_TE(1) */
+	{ 0xca, 0x42 },	/* CKV dummy vblank */
+	{ 0xd6, 0x88 },	/* CLR3 config */
+	{ 0xd7, 0x08 },	/* CLR4 config */
+	{ 0xd2, 0x06 },	/* CLR1 width adjust */
+	{ 0xd3, 0x06 },	/* CLR2..4 width adjust */
+};
+
 static const struct hx8279_panel_desc boe_hx8279d_gtaxl = {
 	.dsi_info = {
 		.type = "HX8279D-BOE2",
@@ -1726,17 +1776,8 @@ static const struct hx8279_panel_desc boe_hx8279d_gtaxl = {
 	.gmux = &boe_hx8279d_gtaxl_gmux,
 
 	/* Gate driver On Array (GOA) Configuration */
-	.goa_odd_timing = { 0, 0, 0, 0x2c, 0, 0 },
-	.goa_even_timing = { 0, 0x2c, 0, 0, 0, 0 },
-	.goa_stv_lead_time_ck = 11,
-	.goa_ckv_lead_time_ck = 7,
-	.goa_ckv_dummy_vblank_num = 2,
-	.goa_ckv_rise_precharge = 40,
-	.goa_clr_polarity = { -1, -1, -1, -1 },
-	.goa_clr_start_pos = { -1, -1, -1, -1 },
-	.goa_unk_e4 = 0xc0,
-	.goa_unk_e5 = 0x0d,
-	.goa_unk_e7 = 0x00,
+	.goa_raw = boe_hx8279d_gtaxl_goa,
+	.num_goa_raw = ARRAY_SIZE(boe_hx8279d_gtaxl_goa),
 
 	/* MIPI Configuration */
 	.eotp_ctl = 0xe5,
