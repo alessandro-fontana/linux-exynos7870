@@ -28,6 +28,10 @@
  #define HX8279_PAGE_SEL		GENMASK(3, 0)
 
 /* Page 0 - Driver/Module Configuration */
+#define HX8279_P0_SLEEP_CTRL		0xb2
+ #define HX8279_P0_SLEEP_IN		0x00
+#define HX8279_P0_DISPLAY_CTRL		0xb3
+ #define HX8279_P0_DISPLAY_OFF_BL_OFF		0x8c
 #define HX8279_P0_UNKNOWN_B6		0xb6
 #define HX8279_P0_UNKNOWN_BA		0xba
 #define HX8279_P0_VGHS			0xbf
@@ -991,13 +995,31 @@ static int hx8279_unprepare(struct drm_panel *panel)
 	struct hx8279 *hx = to_hx8279(panel);
 	struct mipi_dsi_device *dsi = hx->dsi[0];
 	struct mipi_dsi_multi_context dsi_ctx = { .dsi = dsi };
+	const u8 cmd_display_off[] = { HX8279_P0_DISPLAY_CTRL,
+				       HX8279_P0_DISPLAY_OFF_BL_OFF };
+	const u8 cmd_sleep_in[] = { HX8279_P0_SLEEP_CTRL, HX8279_P0_SLEEP_IN };
 
+	/*
+	 * DCS enter_sleep_mode is not implemented by this DriverIC: as the
+	 * vendor driver does, turn display and backlight off through page 0
+	 * register 0xb3 and enter sleep through register 0xb2. Cutting the
+	 * supplies while the panel is still driving leaves a DC residue in
+	 * the glass, seen as horizontal stripes at line pitch.
+	 *
+	 * The page lock is held across the whole sequence so that a
+	 * backlight update cannot switch pages in the middle of it.
+	 */
 	mutex_lock(&hx->page_lock);
 	hx->prepared = false;
-	mutex_unlock(&hx->page_lock);
 
-	mipi_dsi_dcs_enter_sleep_mode_multi(&dsi_ctx);
-	mipi_dsi_msleep(&dsi_ctx, 130);
+	hx8279_set_page(hx, &dsi_ctx, 0);
+	mipi_dsi_generic_write_multi(&dsi_ctx, cmd_display_off,
+				     ARRAY_SIZE(cmd_display_off));
+	mipi_dsi_msleep(&dsi_ctx, 50);
+	mipi_dsi_generic_write_multi(&dsi_ctx, cmd_sleep_in,
+				     ARRAY_SIZE(cmd_sleep_in));
+	mipi_dsi_msleep(&dsi_ctx, 120);
+	mutex_unlock(&hx->page_lock);
 
 	dsi->mode_flags &= ~MIPI_DSI_MODE_LPM;
 	if (hx->dsi[1])
