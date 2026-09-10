@@ -626,7 +626,7 @@ static const struct samsung_dsim_driver_data exynos7870_dsi_driver_data = {
 	.clklane_stop_only = 1,
 	.clk_data = exynos7870_clk_bulk_data,
 	.num_clks = ARRAY_SIZE(exynos7870_clk_bulk_data),
-	.max_freq = 1500,
+	.max_freq = 2100,
 	.wait_for_hdr_fifo = 1,
 	.hdr_fifo_empty_bit = 10,
 	.hdr_fifo_full_bit = 11,
@@ -647,8 +647,8 @@ static const struct samsung_dsim_driver_data exynos7870_dsi_driver_data = {
 	.pll_fin_min = 6,
 	.pll_fin_max = 12,
 	.m_min = 41,
-	.m_max = 125,
-	.min_freq = 500,
+	.m_max = 1023,
+	.min_freq = 1000,
 };
 
 static const struct samsung_dsim_driver_data imx8mm_dsi_driver_data = {
