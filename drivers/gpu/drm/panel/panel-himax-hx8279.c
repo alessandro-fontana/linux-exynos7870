@@ -847,9 +847,18 @@ static void hx8279_power_off(struct hx8279 *hx)
 	/* The DriverIC comes back on page 0 after a power cycle */
 	hx->last_page = 0;
 
-	gpiod_set_value_cansleep(hx->reset_gpio, 0);
+	/*
+	 * The lines are requested GPIOD_ASIS so that a panel left running
+	 * by the bootloader is not disturbed at probe. The direction is
+	 * therefore whatever the bootloader left: on gtaxlwifi RESX (gpd4-1)
+	 * is an input held high by its pull-up, and gpiod_set_value() on an
+	 * input pin never reaches the panel. This is the first time the
+	 * driver drives the lines, so make them outputs here; every later
+	 * gpiod_set_value() in prepare() then really toggles the pin.
+	 */
+	gpiod_direction_output(hx->reset_gpio, 0);
 	usleep_range(100, 500);
-	gpiod_set_value_cansleep(hx->enable_gpio, 0);
+	gpiod_direction_output(hx->enable_gpio, 0);
 	regulator_bulk_disable(ARRAY_SIZE(hx->vregs), hx->vregs);
 }
 
