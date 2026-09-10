@@ -853,17 +853,27 @@ static void hx8279_power_off(struct hx8279 *hx)
 
 	/*
 	 * The lines are requested GPIOD_ASIS so that a panel left running
-	 * by the bootloader is not disturbed at probe. The direction is
-	 * therefore whatever the bootloader left: on gtaxlwifi RESX (gpd4-1)
-	 * is an input held high by its pull-up, and gpiod_set_value() on an
-	 * input pin never reaches the panel. This is the first time the
-	 * driver drives the lines, so make them outputs here; every later
-	 * gpiod_set_value() in prepare() then really toggles the pin.
+	 * by the bootloader is not disturbed at probe, and may still be
+	 * inputs held by their pull-ups: make them outputs here, otherwise
+	 * gpiod_set_value() never reaches the panel.
 	 */
 	gpiod_direction_output(hx->reset_gpio, 0);
 	usleep_range(100, 500);
 	gpiod_direction_output(hx->enable_gpio, 0);
-	regulator_bulk_disable(ARRAY_SIZE(hx->vregs), hx->vregs);
+
+	/*
+	 * Panel supply first, then the I/O rail after a delay, as the
+	 * vendor does: removing the logic supply while the panel supply is
+	 * still up leaves the DriverIC inputs biased through its own I/O,
+	 * and a quick power cycle then misses the power-on reset.
+	 */
+	if (hx->desc->iovcc_to_vdd_delay_ms) {
+		regulator_disable(hx->vregs[0].consumer);
+		msleep(hx->desc->iovcc_to_vdd_delay_ms);
+		regulator_disable(hx->vregs[1].consumer);
+	} else {
+		regulator_bulk_disable(ARRAY_SIZE(hx->vregs), hx->vregs);
+	}
 }
 
 static int hx8279_disable(struct drm_panel *panel)
