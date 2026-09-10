@@ -25,6 +25,7 @@
 
 /* Page selection */
 #define HX8279_REG_PAGE			0xb0
+ #define HX8279_PAGE_UNKNOWN			0xff
  #define HX8279_PAGE_SEL		GENMASK(3, 0)
 
 /* Page 0 - Driver/Module Configuration */
@@ -32,6 +33,8 @@
  #define HX8279_P0_SLEEP_IN		0x00
 #define HX8279_P0_DISPLAY_CTRL		0xb3
  #define HX8279_P0_DISPLAY_OFF_BL_OFF		0x8c
+ #define HX8279_P0_DISPLAY_OFF		0x88
+ #define HX8279_P0_DISPLAY_ON		0x08
 #define HX8279_P0_UNKNOWN_B6		0xb6
 #define HX8279_P0_UNKNOWN_BA		0xba
 #define HX8279_P0_VGHS			0xbf
@@ -856,6 +859,21 @@ static int hx8279_on(struct hx8279 *hx)
 {
 	struct mipi_dsi_device *dsi = hx->dsi[0];
 	struct mipi_dsi_multi_context dsi_ctx = { .dsi = dsi };
+	const u8 cmd_display_off[] = { HX8279_P0_DISPLAY_CTRL,
+				       HX8279_P0_DISPLAY_OFF };
+	const u8 cmd_bl_off[] = { HX8279_P4_REG_BRIGHTNESS, 0x00 };
+
+	/*
+	 * Pages 0 and 4: as the vendor does, turn the display and the
+	 * backlight off so that the tables below reach a panel that is not
+	 * driving the glass.
+	 */
+	hx8279_set_page(hx, &dsi_ctx, 0);
+	mipi_dsi_generic_write_multi(&dsi_ctx, cmd_display_off,
+				     ARRAY_SIZE(cmd_display_off));
+	hx8279_set_page(hx, &dsi_ctx, 4);
+	mipi_dsi_generic_write_multi(&dsi_ctx, cmd_bl_off,
+				     ARRAY_SIZE(cmd_bl_off));
 
 	/* Page 5 */
 	hx8279_set_mipi_cfg(hx, &dsi_ctx);
@@ -922,7 +940,14 @@ static int hx8279_disable(struct drm_panel *panel)
 	struct mipi_dsi_device *dsi = hx->dsi[0];
 	struct mipi_dsi_multi_context dsi_ctx = { .dsi = dsi };
 
-	mipi_dsi_dcs_set_display_off_multi(&dsi_ctx);
+	const u8 cmd_display_off[] = { HX8279_P0_DISPLAY_CTRL,
+				       HX8279_P0_DISPLAY_OFF_BL_OFF };
+
+	mutex_lock(&hx->page_lock);
+	hx8279_set_page(hx, &dsi_ctx, 0);
+	mipi_dsi_generic_write_multi(&dsi_ctx, cmd_display_off,
+				     ARRAY_SIZE(cmd_display_off));
+	mutex_unlock(&hx->page_lock);
 
 	return 0;
 }
@@ -933,7 +958,14 @@ static int hx8279_enable(struct drm_panel *panel)
 	struct mipi_dsi_device *dsi = hx->dsi[0];
 	struct mipi_dsi_multi_context dsi_ctx = { .dsi = dsi };
 
-	mipi_dsi_dcs_set_display_on_multi(&dsi_ctx);
+	const u8 cmd_display_on[] = { HX8279_P0_DISPLAY_CTRL,
+				      HX8279_P0_DISPLAY_ON };
+
+	mutex_lock(&hx->page_lock);
+	hx8279_set_page(hx, &dsi_ctx, 0);
+	mipi_dsi_generic_write_multi(&dsi_ctx, cmd_display_on,
+				     ARRAY_SIZE(cmd_display_on));
+	mutex_unlock(&hx->page_lock);
 
 	return 0;
 }
@@ -956,17 +988,18 @@ static int hx8279_prepare(struct drm_panel *panel)
 		if (ret)
 			return ret;
 
+		/*
+		 * The DriverIC is on whatever page the bootloader left it:
+		 * invalidate the cache so the first page switch is sent.
+		 */
+		hx->last_page = HX8279_PAGE_UNKNOWN;
+
 		hx->handoff = false;
 
 		/*
-		 * The cold path raises MIPI_DSI_MODE_LPM further down and
-		 * it stays up for every later command. Taking this early
-		 * return without it leaves display-on and the backlight
-		 * writes going out as HS commands, and those only travel
-		 * inside the HS video stream: with scanout deliberately
-		 * not started yet, they sit in the header FIFO until the
-		 * first flush. LP escape transmission does not need video,
-		 * so use it on this path too.
+		 * As on the cold path, send commands in LP mode: HS
+		 * commands only travel inside the video stream, which is
+		 * not running yet.
 		 */
 		dsi->mode_flags |= MIPI_DSI_MODE_LPM;
 		if (hx->dsi[1])
