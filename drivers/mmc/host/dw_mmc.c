@@ -595,10 +595,10 @@ static inline int dw_mci_prepare_desc(struct dw_mci *host, struct mmc_data *data
 			 */
 			if (is_64bit)
 				err = readl_poll_timeout_atomic(&desc64->des0, val,
-					IDMAC_OWN_CLR64(val), 10, 100 * USEC_PER_MSEC);
+					IDMAC_OWN_CLR64(val), 10, 1 * USEC_PER_MSEC);
 			else
 				err = readl_poll_timeout_atomic(&desc->des0, val,
-					IDMAC_OWN_CLR64(val), 10, 100 * USEC_PER_MSEC);
+					IDMAC_OWN_CLR64(val), 10, 1 * USEC_PER_MSEC);
 			if (err)
 				goto err_own_bit;
 
