@@ -714,6 +714,24 @@ static void decon_init(struct decon_context *ctx)
 		val |= WINCHMAP_DMA(win, win);
 	}
 	writel(val, ctx->regs + WINCHMAP0);
+
+	/*
+	 * The reset does not clear the per-window configuration: do it here
+	 * so that a window left enabled before the suspend cannot be latched
+	 * again by decon_atomic_flush(), pointing at a buffer that userspace
+	 * has since released.
+	 */
+	for (win = 0; win < WINDOWS_NR; win++) {
+		decon_shadow_protect_win(ctx, win, true);
+		val = readl(ctx->regs + WINCON(win));
+		val &= ~WINCONx_ENWIN;
+		writel(val, ctx->regs + WINCON(win));
+		decon_shadow_protect_win(ctx, win, false);
+	}
+
+	val = readl(ctx->regs + DECON_UPDATE);
+	val |= DECON_UPDATE_STANDALONE_F;
+	writel(val, ctx->regs + DECON_UPDATE);
 }
 
 static void decon_atomic_enable(struct exynos_drm_crtc *crtc)
@@ -741,6 +759,7 @@ static void decon_atomic_enable(struct exynos_drm_crtc *crtc)
 static void decon_atomic_disable(struct exynos_drm_crtc *crtc)
 {
 	struct decon_context *ctx = crtc->ctx;
+	u32 val;
 	int i;
 
 	/*
@@ -750,6 +769,22 @@ static void decon_atomic_disable(struct exynos_drm_crtc *crtc)
 	 */
 	for (i = 0; i < WINDOWS_NR; i++)
 		decon_disable_plane(crtc, &ctx->planes[i]);
+
+	/*
+	 * decon_disable_plane() leaves the shadow protected: on the commit
+	 * path decon_atomic_flush() releases it, but nothing flushes after
+	 * an atomic disable, so without this the clear above never reaches
+	 * the shadow registers and the block keeps the old buffers.
+	 */
+	for (i = 0; i < WINDOWS_NR; i++)
+		decon_shadow_protect_win(ctx, i, false);
+
+	val = readl(ctx->regs + DECON_UPDATE);
+	val |= DECON_UPDATE_STANDALONE_F;
+	writel(val, ctx->regs + DECON_UPDATE);
+
+	/* Disabling a channel only takes effect at the next vsync. */
+	decon_wait_for_vblank(ctx);
 
 	ctx->scanout_on = false;
 
