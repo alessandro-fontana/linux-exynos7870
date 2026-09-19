@@ -1752,27 +1752,15 @@ static void samsung_dsim_atomic_enable(struct drm_bridge *bridge,
 	struct samsung_dsim *dsi = bridge_to_dsi(bridge);
 
 	/*
-	 * The cold init on exynos7870 has already programmed the display
-	 * mode and raised the SFR standby so that the panel init table
-	 * could be transmitted (see samsung_dsim_init()). Rewriting
-	 * MDRESOL and the porches with standby high stalls the transmit
-	 * FSM: the last queued command header then sits untransmitted in
-	 * the FIFO until video actually starts, and every later command
-	 * times out against it. The vendor CAL never reprograms these
-	 * registers with standby high - dsim_reg_set_partial_update()
-	 * drops it first and raises it again after. Let the pending
-	 * header drain, then do the same.
+	 * On exynos7870 samsung_dsim_init() has already programmed the
+	 * display mode and raised the SFR standby. Doing it again here
+	 * stalls the transmit FSM: the next command is silently lost and
+	 * the link stays dead until the next full init.
 	 */
-	if (dsi->plat_data->hw_type == DSIM_TYPE_EXYNOS7870) {
-		if (dsi->driver_data->wait_for_hdr_fifo &&
-		    samsung_dsim_wait_for_hdr_fifo(dsi))
-			dev_warn(dsi->dev,
-				 "header FIFO not empty before reprogramming\n");
-		samsung_dsim_set_display_enable(dsi, false);
+	if (dsi->plat_data->hw_type != DSIM_TYPE_EXYNOS7870) {
+		samsung_dsim_set_display_mode(dsi);
+		samsung_dsim_set_display_enable(dsi, true);
 	}
-
-	samsung_dsim_set_display_mode(dsi);
-	samsung_dsim_set_display_enable(dsi, true);
 
 	dsi->state |= DSIM_STATE_VIDOUT_AVAILABLE;
 }
