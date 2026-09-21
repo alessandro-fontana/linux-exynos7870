@@ -138,6 +138,12 @@ struct stmfts_data {
 	 * the 'key_swap' sysfs attribute.
 	 */
 	bool key_swap;
+	/*
+	 * Stop scanning the touch keys altogether.  A device whose keys
+	 * duplicate an on-screen navigation bar wants them silenced, and the
+	 * controller can do it in hardware.  Exposed as 'key_disable'.
+	 */
+	bool key_disable;
 
 	u16 chip_id;
 	u16 fw_ver;
@@ -595,7 +601,7 @@ static int stmfts_initialise(struct stmfts_data *sdata)
 	/* the downstream reinit path waits here before touching anything */
 	stmfts_delay(50);
 
-	if (sdata->use_key) {
+	if (sdata->use_key && !sdata->key_disable) {
 		err = stmfts_command(sdata, STMFTS_MS_KEY_SENSE_ON);
 		if (err)
 			/* the touchscreen is usable without the keys */
@@ -873,12 +879,76 @@ static ssize_t key_swap_store(struct device *dev,
 	return count;
 }
 
+/*
+ * Silence the two touch keys in the controller, which is what a device wants
+ * when an on-screen navigation bar does their job instead.  The scan is
+ * turned off in hardware rather than the events being dropped, so nothing is
+ * spent scanning keys nobody reads.
+ */
+static ssize_t key_disable_show(struct device *dev,
+				struct device_attribute *attr, char *buf)
+{
+	struct stmfts_data *sdata = dev_get_drvdata(dev);
+
+	return sysfs_emit(buf, "%u\n", sdata->key_disable ? 1 : 0);
+}
+
+static ssize_t key_disable_store(struct device *dev,
+				 struct device_attribute *attr,
+				 const char *buf, size_t count)
+{
+	struct stmfts_data *sdata = dev_get_drvdata(dev);
+	bool disable;
+	int err;
+
+	if (!sdata->use_key)
+		return -EOPNOTSUPP;
+
+	err = kstrtobool(buf, &disable);
+	if (err)
+		return err;
+
+	mutex_lock(&sdata->key_mutex);
+
+	if (sdata->key_disable != disable) {
+		err = stmfts_command(sdata, disable ? STMFTS_MS_KEY_SENSE_OFF :
+						      STMFTS_MS_KEY_SENSE_ON);
+		if (err) {
+			mutex_unlock(&sdata->key_mutex);
+			return err;
+		}
+
+		/*
+		 * Turning the scan off while a key is held leaves the driver
+		 * believing it is still down, and no release will ever come.
+		 */
+		if (disable && sdata->key_state) {
+			input_report_key(sdata->input,
+					 sdata->key_swap ? KEY_BACK : KEY_MENU,
+					 0);
+			input_report_key(sdata->input,
+					 sdata->key_swap ? KEY_MENU : KEY_BACK,
+					 0);
+			input_sync(sdata->input);
+			sdata->key_state = 0;
+		}
+
+		sdata->key_disable = disable;
+	}
+
+	mutex_unlock(&sdata->key_mutex);
+
+	return count;
+}
+
+static DEVICE_ATTR_RW(key_disable);
 static DEVICE_ATTR_RW(key_swap);
 static DEVICE_ATTR_RO(chip_id);
 static DEVICE_ATTR_RO(fw_ver);
 static DEVICE_ATTR_RO(config_version);
 
 static struct attribute *stmfts_sysfs_attrs[] = {
+	&dev_attr_key_disable.attr,
 	&dev_attr_key_swap.attr,
 	&dev_attr_chip_id.attr,
 	&dev_attr_fw_ver.attr,
