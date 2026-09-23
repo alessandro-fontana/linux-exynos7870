@@ -77,6 +77,14 @@ struct decon_context {
 	atomic_t			wait_vsync_event;
 	unsigned long			underrun_count;
 
+	/*
+	 * The event of the last commit, held until the shadow registers
+	 * have latched it, and the vblanks it has waited so far. Both under
+	 * drm_dev->event_lock.
+	 */
+	struct drm_pending_vblank_event	*event;
+	unsigned int			event_vblanks;
+
 	const struct decon_data *data;
 	struct drm_encoder *encoder;
 };
@@ -625,6 +633,102 @@ static void decon_start_scanout(struct decon_context *ctx)
 	ctx->scanout_on = true;
 }
 
+/*
+ * How many vblanks a commit may wait for its registers to latch before it is
+ * completed anyway with a warning, rather than stalling until the flip_done
+ * timeout. Two covers a flush that missed the vblank.
+ */
+#define DECON_LATCH_MAX_VBLANKS	4
+
+/*
+ * Hold the commit's event until the shadow registers have really latched.
+ *
+ * DECON_UPDATE_STANDALONE_F is set once the windows are programmed and
+ * cleared by the block when it copies the shadow registers into the active
+ * ones, at a vblank. A flush that lands close to the vblank misses it and
+ * the old buffers are scanned out for one more frame: completing the commit
+ * at that interrupt would release them while they are still fetched, and
+ * the SysMMU faults. The event is therefore sent from the vblank handler at
+ * the first vblank that finds the bit clear.
+ */
+static void decon_queue_event(struct decon_context *ctx)
+{
+	struct drm_crtc *crtc = &ctx->crtc->base;
+	struct drm_pending_vblank_event *event = crtc->state->event;
+	unsigned long flags;
+	int ret;
+
+	if (!event)
+		return;
+	crtc->state->event = NULL;
+
+	ret = drm_crtc_vblank_get(crtc);
+
+	spin_lock_irqsave(&crtc->dev->event_lock, flags);
+	if (WARN_ON(ret != 0)) {
+		/* no vblank interrupt to wait for */
+		drm_crtc_send_vblank_event(crtc, event);
+	} else {
+		WARN_ON(ctx->event);
+		ctx->event = event;
+		ctx->event_vblanks = 0;
+	}
+	spin_unlock_irqrestore(&crtc->dev->event_lock, flags);
+}
+
+/* From the vblank interrupt, after the vblank has been counted. */
+static void decon_handle_event(struct decon_context *ctx)
+{
+	struct drm_crtc *crtc = &ctx->crtc->base;
+	struct drm_pending_vblank_event *event;
+	bool latched;
+
+	spin_lock(&crtc->dev->event_lock);
+
+	event = ctx->event;
+	if (!event) {
+		spin_unlock(&crtc->dev->event_lock);
+		return;
+	}
+
+	latched = !(readl(ctx->regs + DECON_UPDATE) &
+		    DECON_UPDATE_STANDALONE_F);
+	if (!latched && ++ctx->event_vblanks < DECON_LATCH_MAX_VBLANKS) {
+		spin_unlock(&crtc->dev->event_lock);
+		return;
+	}
+
+	if (!latched)
+		dev_warn_ratelimited(ctx->dev,
+				     "update not latched after %u vblanks, completing the commit anyway\n",
+				     ctx->event_vblanks);
+
+	ctx->event = NULL;
+	drm_crtc_send_vblank_event(crtc, event);
+
+	spin_unlock(&crtc->dev->event_lock);
+
+	drm_crtc_vblank_put(crtc);
+}
+
+/* Nothing will latch once the block is off: complete what is left. */
+static void decon_flush_event(struct decon_context *ctx)
+{
+	struct drm_crtc *crtc = &ctx->crtc->base;
+	struct drm_pending_vblank_event *event;
+	unsigned long flags;
+
+	spin_lock_irqsave(&crtc->dev->event_lock, flags);
+	event = ctx->event;
+	ctx->event = NULL;
+	if (event)
+		drm_crtc_send_vblank_event(crtc, event);
+	spin_unlock_irqrestore(&crtc->dev->event_lock, flags);
+
+	if (event)
+		drm_crtc_vblank_put(crtc);
+}
+
 static void decon_atomic_flush(struct exynos_drm_crtc *crtc)
 {
 	struct decon_context *ctx = crtc->ctx;
@@ -635,7 +739,11 @@ static void decon_atomic_flush(struct exynos_drm_crtc *crtc)
 
 	decon_start_scanout(ctx);
 
-	exynos_crtc_handle_event(crtc);
+	/* the i80 interface does not count vblanks in this driver */
+	if (ctx->i80_if)
+		exynos_crtc_handle_event(crtc);
+	else
+		decon_queue_event(ctx);
 }
 
 /*
@@ -762,6 +870,8 @@ static void decon_atomic_disable(struct exynos_drm_crtc *crtc)
 	u32 val;
 	int i;
 
+	decon_flush_event(ctx);
+
 	/*
 	 * We need to make sure that all windows are disabled before we
 	 * suspend that connector. Otherwise we might try to scan from
@@ -832,6 +942,7 @@ static irqreturn_t decon_irq_handler(int irq, void *dev_id)
 
 	if (!ctx->i80_if) {
 		drm_crtc_handle_vblank(&ctx->crtc->base);
+		decon_handle_event(ctx);
 
 		/* set wait vsync event to zero and wake up queue. */
 		if (atomic_read(&ctx->wait_vsync_event)) {
