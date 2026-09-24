@@ -158,7 +158,16 @@ static const struct dma_fence_ops drm_crtc_fence_ops;
 
 static struct drm_crtc *fence_to_crtc(struct dma_fence *fence)
 {
-	BUG_ON(rcu_access_pointer(fence->ops) != &drm_crtc_fence_ops);
+	const struct dma_fence_ops *ops = rcu_access_pointer(fence->ops);
+
+	/*
+	 * Signalling clears fence->ops (dma_fence_signal_timestamp_locked()),
+	 * and it can do so between dma_fence_driver_name() reading the ops
+	 * and calling us through them. NULL here only means the fence was
+	 * signalled in that window: we were reached through our own ops, and
+	 * the CRTC outlives its fences.
+	 */
+	BUG_ON(ops && ops != &drm_crtc_fence_ops);
 	return container_of(fence->extern_lock, struct drm_crtc, fence_lock);
 }
 
