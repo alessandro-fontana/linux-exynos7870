@@ -793,6 +793,17 @@ config VIDEO_S5K6A3
 	  This is a V4L2 sensor driver for Samsung S5K6A3 raw
 	  camera sensor.
 
+config VIDEO_SR259
+	tristate "SK hynix SR259 sensor support"
+	select V4L2_CCI_I2C
+	help
+	  This is a Video4Linux2 sensor driver for the SK hynix SR259
+	  2 MP raw Bayer camera, the front camera of the Samsung Galaxy
+	  Tab A 10.1 (2016).
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called sr259.
+
 config VIDEO_S5KJN1
 	tristate "Samsung S5KJN1 sensor support"
 	select V4L2_CCI_I2C
