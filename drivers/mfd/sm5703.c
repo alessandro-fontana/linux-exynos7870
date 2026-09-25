@@ -38,6 +38,8 @@ static const struct resource sm5703_charger_resources[] = {
 static const struct mfd_cell sm5703_cells[] = {
 	MFD_CELL_OF("sm5703-charger", sm5703_charger_resources, NULL, 0, 0,
 		    "siliconmitus,sm5703-charger"),
+	MFD_CELL_OF("sm5703-flash", NULL, NULL, 0, 0,
+		    "siliconmitus,sm5703-flash"),
 };
 
 static const struct regmap_irq sm5703_irqs[] = {
