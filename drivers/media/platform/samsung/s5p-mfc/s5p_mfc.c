@@ -1223,6 +1223,14 @@ static int s5p_mfc_configure_common_memory(struct s5p_mfc_dev *mfc_dev)
 	if (IS_ENABLED(CONFIG_DMA_CMA) || exynos_is_iommu_available(dev))
 		mem_size = SZ_8M;
 
+	/*
+	 * Every H.264 or HEVC decoder takes a 2 MiB context from this pool:
+	 * 8 MiB, less the firmware, only hold three of the four instances
+	 * the codec list advertises.
+	 */
+	if (mfc_dev->variant->v10x_quirks && exynos_is_iommu_available(dev))
+		mem_size = SZ_16M;
+
 	if (mfc_mem_size)
 		mem_size = memparse(mfc_mem_size, NULL);
 
@@ -1230,8 +1238,22 @@ static int s5p_mfc_configure_common_memory(struct s5p_mfc_dev *mfc_dev)
 	if (!mfc_dev->mem_bitmap)
 		return -ENOMEM;
 
+	/*
+	 * The firmware addresses memory as offsets from its base: every
+	 * buffer must lie above it. The IOMMU DMA allocator hands out
+	 * addresses top down, so the firmware, allocated first, would end
+	 * up above everything else. Allocate it under 32 MiB, right above
+	 * the 16 MiB the device tree reserves, then keep the video buffers
+	 * within 256 MiB, above it.
+	 */
+	if (mfc_dev->variant->v10x_quirks && exynos_is_iommu_available(dev))
+		dma_set_mask_and_coherent(dev, DMA_BIT_MASK(25));
+
 	mfc_dev->mem_virt = dma_alloc_coherent(dev, mem_size,
 					       &mfc_dev->mem_base, GFP_KERNEL);
+
+	if (mfc_dev->variant->v10x_quirks && exynos_is_iommu_available(dev))
+		dma_set_mask_and_coherent(dev, DMA_BIT_MASK(28));
 	if (!mfc_dev->mem_virt) {
 		bitmap_free(mfc_dev->mem_bitmap);
 		dev_err(dev, "failed to preallocate %ld MiB for the firmware and context buffers\n",
@@ -1680,6 +1702,18 @@ static const struct s5p_mfc_variant mfc_drvdata_v10 = {
 	.fw_name[0]     = "s5p-mfc-v10.fw",
 };
 
+/* Exynos7870: MFC v10 (version 0xa0b0) with a single gate clock. */
+static const struct s5p_mfc_variant mfc_drvdata_v10_7870 = {
+	.version        = MFC_VERSION_V10,
+	.version_bit    = MFC_V10_BIT,
+	.port_num       = MFC_NUM_PORTS_V10,
+	.buf_size       = &buf_size_v10,
+	.fw_name[0]     = "s5p-mfc-v10.fw",
+	.clk_names	= {"mfc"},
+	.num_clocks	= 1,
+	.v10x_quirks	= true,
+};
+
 static struct s5p_mfc_buf_size_v6 mfc_buf_size_v12 = {
 	.dev_ctx        = MFC_CTX_BUF_SIZE_V12,
 	.h264_dec_ctx   = MFC_H264_DEC_CTX_BUF_SIZE_V12,
@@ -1727,6 +1761,9 @@ static const struct of_device_id exynos_mfc_match[] = {
 	}, {
 		.compatible = "samsung,mfc-v10",
 		.data = &mfc_drvdata_v10,
+	}, {
+		.compatible = "samsung,exynos7870-mfc",
+		.data = &mfc_drvdata_v10_7870,
 	}, {
 		.compatible = "tesla,fsd-mfc",
 		.data = &mfc_drvdata_v12,

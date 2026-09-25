@@ -594,6 +594,19 @@ static int s5p_mfc_set_dec_stream_buffer_v6(struct s5p_mfc_ctx *ctx,
 	mfc_debug(2, "inst_no: %d, buf_addr: 0x%08x,\n"
 		"buf_size: 0x%08x (%d)\n",
 		ctx->inst_no, buf_addr, strm_size, strm_size);
+	if (dev->variant->v10x_quirks) {
+		/* The real buffer size, with 512 bytes the firmware may read past the data. */
+		unsigned int cpb = ALIGN(ctx->dec_src_buf_size, 512);
+
+		strm_size = min(strm_size, cpb - 512);
+		writel(strm_size, mfc_regs->d_stream_data_size);
+		writel(buf_addr, mfc_regs->d_cpb_buffer_addr);
+		writel(cpb, mfc_regs->d_cpb_buffer_size);
+		writel(start_num_byte, mfc_regs->d_cpb_buffer_offset);
+		mfc_debug_leave();
+		return 0;
+	}
+
 	writel(strm_size, mfc_regs->d_stream_data_size);
 	writel(buf_addr, mfc_regs->d_cpb_buffer_addr);
 	writel(buf_size->cpb, mfc_regs->d_cpb_buffer_size);
@@ -1769,6 +1782,12 @@ static int s5p_mfc_init_decode_v6(struct s5p_mfc_ctx *ctx)
 	if (ctx->display_delay_enable) {
 		reg |= (0x1 << S5P_FIMV_D_OPT_DDELAY_EN_SHIFT_V6);
 		writel(ctx->display_delay, mfc_regs->d_display_delay);
+	}
+
+	if (dev->variant->v10x_quirks) {
+		/* Vendor driver: special parsing (PPS too), conceal control. */
+		reg |= BIT(15) | (0x4 << 8);
+		writel(0x8020000, dev->regs_base + 0xf0c8);
 	}
 
 	if (IS_MFCV7_PLUS(dev) || IS_MFCV6_V2(dev)) {

@@ -234,6 +234,11 @@ struct s5p_mfc_variant {
 	const char	*clk_names[MFC_MAX_CLOCKS];
 	int		num_clocks;
 	bool		use_clock_gating;
+	/*
+	 * The "v10.x" firmware of the vendor driver (Exynos7870, 0xa0b0):
+	 * real CPB size, special parsing and conceal control at init.
+	 */
+	bool		v10x_quirks;
 };
 
 /**
