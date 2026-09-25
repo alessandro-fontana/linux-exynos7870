@@ -21,6 +21,9 @@ properties:
   reg:
     maxItems: 1
 
+  vdd-supply:
+    description: Power supply of the device.
+
 required:
   - compatible
   - reg

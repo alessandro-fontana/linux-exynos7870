@@ -7,6 +7,7 @@
 #include <linux/iopoll.h>
 #include <linux/module.h>
 #include <linux/pm_runtime.h>
+#include <linux/regulator/consumer.h>
 #include <media/v4l2-ctrls.h>
 #include <media/v4l2-device.h>
 
@@ -38,9 +39,13 @@
 
 #define MAX_RETRY		10
 
+/* From supply on to the first I2C command */
+#define DW9807_PWR_ON_DELAY_US	5000
+
 struct dw9807_device {
 	struct v4l2_ctrl_handler ctrls_vcm;
 	struct v4l2_subdev sd;
+	struct regulator *vdd;
 	u16 current_val;
 };
 
@@ -185,6 +190,16 @@ static int dw9807_probe(struct i2c_client *client)
 	if (dw9807_dev == NULL)
 		return -ENOMEM;
 
+	dw9807_dev->vdd = devm_regulator_get(&client->dev, "vdd");
+	if (IS_ERR(dw9807_dev->vdd))
+		return dev_err_probe(&client->dev, PTR_ERR(dw9807_dev->vdd),
+				     "failed to get vdd regulator\n");
+
+	rval = regulator_enable(dw9807_dev->vdd);
+	if (rval)
+		return rval;
+	usleep_range(DW9807_PWR_ON_DELAY_US, DW9807_PWR_ON_DELAY_US + 1000);
+
 	v4l2_i2c_subdev_init(&dw9807_dev->sd, client, &dw9807_ops);
 	dw9807_dev->sd.flags |= V4L2_SUBDEV_FL_HAS_DEVNODE;
 	dw9807_dev->sd.internal_ops = &dw9807_int_ops;
@@ -212,6 +227,7 @@ static int dw9807_probe(struct i2c_client *client)
 err_cleanup:
 	v4l2_ctrl_handler_free(&dw9807_dev->ctrls_vcm);
 	media_entity_cleanup(&dw9807_dev->sd.entity);
+	regulator_disable(dw9807_dev->vdd);
 
 	return rval;
 }
@@ -222,6 +238,9 @@ static void dw9807_remove(struct i2c_client *client)
 	struct dw9807_device *dw9807_dev = sd_to_dw9807_vcm(sd);
 
 	pm_runtime_disable(&client->dev);
+	if (!pm_runtime_status_suspended(&client->dev))
+		regulator_disable(dw9807_dev->vdd);
+	pm_runtime_set_suspended(&client->dev);
 
 	dw9807_subdev_cleanup(dw9807_dev);
 }
@@ -249,12 +268,10 @@ static int __maybe_unused dw9807_vcm_suspend(struct device *dev)
 
 	/* Power down */
 	ret = i2c_master_send(client, tx_data, sizeof(tx_data));
-	if (ret < 0) {
+	if (ret < 0)
 		dev_err(&client->dev, "I2C write CTL fail ret = %d\n", ret);
-		return ret;
-	}
 
-	return 0;
+	return regulator_disable(dw9807_dev->vdd);
 }
 
 /*
@@ -271,10 +288,16 @@ static int  __maybe_unused dw9807_vcm_resume(struct device *dev)
 	const char tx_data[2] = { DW9807_CTL_ADDR, 0x00 };
 	int ret, val;
 
+	ret = regulator_enable(dw9807_dev->vdd);
+	if (ret)
+		return ret;
+	usleep_range(DW9807_PWR_ON_DELAY_US, DW9807_PWR_ON_DELAY_US + 1000);
+
 	/* Power on */
 	ret = i2c_master_send(client, tx_data, sizeof(tx_data));
 	if (ret < 0) {
 		dev_err(&client->dev, "I2C write CTL fail ret = %d\n", ret);
+		regulator_disable(dw9807_dev->vdd);
 		return ret;
 	}
 
@@ -300,7 +323,7 @@ static const struct of_device_id dw9807_of_table[] = {
 MODULE_DEVICE_TABLE(of, dw9807_of_table);
 
 static const struct dev_pm_ops dw9807_pm_ops = {
-	SET_SYSTEM_SLEEP_PM_OPS(dw9807_vcm_suspend, dw9807_vcm_resume)
+	SET_SYSTEM_SLEEP_PM_OPS(pm_runtime_force_suspend, pm_runtime_force_resume)
 	SET_RUNTIME_PM_OPS(dw9807_vcm_suspend, dw9807_vcm_resume, NULL)
 };
 
