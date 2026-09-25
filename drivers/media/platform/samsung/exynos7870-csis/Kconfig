@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: GPL-2.0-only
+
+config VIDEO_EXYNOS7870_CSIS
+	tristate "Samsung Exynos7870 MIPI CSI-2 receiver with DMA"
+	depends on V4L_PLATFORM_DRIVERS
+	depends on VIDEO_DEV
+	depends on ARCH_EXYNOS || COMPILE_TEST
+	depends on OF && HAS_DMA
+	select MEDIA_CONTROLLER
+	select VIDEO_V4L2_SUBDEV_API
+	select V4L2_FWNODE
+	select VIDEOBUF2_DMA_CONTIG
+	select GENERIC_PHY
+	help
+	  The MIPI CSI-2 receiver (CSIS v4.1) of the Samsung Exynos7870,
+	  used through its own DMA engine: raw frames from the sensor go
+	  straight to memory, without the camera ISP.
+
+	  To compile this driver as a module, choose M here: the module
+	  will be called exynos7870-csis.

@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-only
 obj-y += exynos-gsc/
 obj-y += exynos4-is/
+obj-y += exynos7870-csis/
 obj-y += s3c-camif/
 obj-y += s5p-g2d/
 obj-y += s5p-jpeg/

@@ -1,0 +1,1 @@
+obj-$(CONFIG_VIDEO_EXYNOS7870_CSIS) += exynos7870-csis.o
