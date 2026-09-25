@@ -781,6 +781,17 @@ config VIDEO_S5K3M5
 	  To compile this driver as a module, choose M here: the
 	  module will be called s5k3m5.
 
+config VIDEO_S5K4H5YC
+	tristate "Samsung S5K4H5YC sensor support"
+	select V4L2_CCI_I2C
+	help
+	  This is a Video4Linux2 sensor driver for the Samsung S5K4H5YC
+	  8 MP raw Bayer camera, the rear camera of the Samsung Galaxy
+	  Tab A 10.1 (2016).
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called s5k4h5yc.
+
 config VIDEO_S5K5BAF
 	tristate "Samsung S5K5BAF sensor support"
 	help
