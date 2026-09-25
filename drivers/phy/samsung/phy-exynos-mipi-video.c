@@ -237,6 +237,7 @@ static const struct mipi_phy_device_desc exynos7870_mipi_phy = {
 			.resetn_val = BIT(0),
 			.resetn_reg = 0,
 			.resetn_map = EXYNOS_MIPI_REGMAP_CAM0,
+			.enable_before_reset = true,
 		}, {
 			/* EXYNOS_MIPI_PHY_ID_DSIM0 */
 			.coupled_phy_id = EXYNOS_MIPI_PHY_ID_CSIS0,
@@ -256,6 +257,7 @@ static const struct mipi_phy_device_desc exynos7870_mipi_phy = {
 			.resetn_val = BIT(1),
 			.resetn_reg = 0,
 			.resetn_map = EXYNOS_MIPI_REGMAP_CAM0,
+			.enable_before_reset = true,
 		}, {
 			/* EXYNOS_MIPI_PHY_ID_CSIS2 */
 			.coupled_phy_id = EXYNOS_MIPI_PHY_ID_NONE,
@@ -265,6 +267,7 @@ static const struct mipi_phy_device_desc exynos7870_mipi_phy = {
 			.resetn_val = BIT(2),
 			.resetn_reg = 0,
 			.resetn_map = EXYNOS_MIPI_REGMAP_CAM0,
+			.enable_before_reset = true,
 		},
 	},
 };
@@ -294,9 +297,8 @@ static int __set_phy_state(const struct exynos_mipi_phy_desc *data,
 		 * way up bypass the isolation, then assert and release the
 		 * reset; on the way down hold the reset, then isolate. The
 		 * generic order below releases the reset while the PHY is
-		 * still isolated, so it powers up without one: on exynos7870
-		 * the DSI PLL then locks only sometimes, and the DSIM link
-		 * registers clocked from the PHY hang the bus when touched.
+		 * still isolated: on exynos7870 the DSI PLL then may not lock
+		 * and the DSIM registers clocked from the PHY hang the bus.
 		 */
 		if (on) {
 			regmap_update_bits(enable_map, data->enable_reg,
