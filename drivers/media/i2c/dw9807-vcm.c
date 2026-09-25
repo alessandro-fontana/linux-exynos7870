@@ -7,6 +7,7 @@
 #include <linux/iopoll.h>
 #include <linux/module.h>
 #include <linux/pm_runtime.h>
+#include <linux/property.h>
 #include <linux/regulator/consumer.h>
 #include <media/v4l2-ctrls.h>
 #include <media/v4l2-device.h>
@@ -39,6 +40,11 @@
 
 #define MAX_RETRY		10
 
+#define DW9807_CTL_RING_EN	BIT(1)
+#define DW9807_MODE_SAC_SHIFT	5
+#define DW9807_MODE_PRESC_MASK	0x07
+#define DW9807_SACT_MASK	0x3f
+
 /* From supply on to the first I2C command */
 #define DW9807_PWR_ON_DELAY_US	5000
 
@@ -47,6 +53,10 @@ struct dw9807_device {
 	struct v4l2_subdev sd;
 	struct regulator *vdd;
 	bool online;
+	/* Smart Actuator Control, from the device tree; direct mode if unset */
+	bool sac;
+	u8 mode;
+	u8 sact;
 	u16 current_val;
 };
 
@@ -189,6 +199,7 @@ static int dw9807_init_controls(struct dw9807_device *dev_vcm)
 static int dw9807_probe(struct i2c_client *client)
 {
 	struct dw9807_device *dw9807_dev;
+	u32 val;
 	int rval;
 
 	dw9807_dev = devm_kzalloc(&client->dev, sizeof(*dw9807_dev),
@@ -200,6 +211,24 @@ static int dw9807_probe(struct i2c_client *client)
 	if (IS_ERR(dw9807_dev->vdd))
 		return dev_err_probe(&client->dev, PTR_ERR(dw9807_dev->vdd),
 				     "failed to get vdd regulator\n");
+
+	/*
+	 * Optional Smart Actuator Control: the lens settles in one SAC period
+	 * instead of ringing for several frames. The values depend on the
+	 * resonance of the actuator, hence on the module.
+	 */
+	if (!device_property_read_u32(&client->dev, "dongwoon,sac-mode", &val)) {
+		u32 presc = 0, sact = 0x20;
+
+		device_property_read_u32(&client->dev, "dongwoon,vcm-prescale",
+					 &presc);
+		device_property_read_u32(&client->dev, "dongwoon,sac-timing",
+					 &sact);
+		dw9807_dev->sac = true;
+		dw9807_dev->mode = (val << DW9807_MODE_SAC_SHIFT) |
+				   (presc & DW9807_MODE_PRESC_MASK);
+		dw9807_dev->sact = sact & DW9807_SACT_MASK;
+	}
 
 	rval = regulator_enable(dw9807_dev->vdd);
 	if (rval)
@@ -313,6 +342,19 @@ static int  __maybe_unused dw9807_vcm_resume(struct device *dev)
 	if (!dw9807_dev->online) {
 		dev_warn(&client->dev, "not responding: %d\n", ret);
 		return 0;
+	}
+
+	if (dw9807_dev->sac) {
+		const char ring[2] = { DW9807_CTL_ADDR, DW9807_CTL_RING_EN };
+		const char mode[2] = { DW9807_MODE_ADDR, dw9807_dev->mode };
+		const char sact[2] = { DW9807_RESONANCE_ADDR, dw9807_dev->sact };
+
+		/* 100 us from power on to the mode registers */
+		usleep_range(100, 200);
+		if (i2c_master_send(client, ring, sizeof(ring)) < 0 ||
+		    i2c_master_send(client, mode, sizeof(mode)) < 0 ||
+		    i2c_master_send(client, sact, sizeof(sact)) < 0)
+			dev_err(&client->dev, "failed to set the SAC mode\n");
 	}
 
 	for (val = dw9807_dev->current_val % DW9807_CTRL_STEPS;

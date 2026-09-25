@@ -24,6 +24,25 @@ properties:
   vdd-supply:
     description: Power supply of the device.
 
+  dongwoon,sac-mode:
+    description:
+      Enables the ringing control and selects the Smart Actuator Control
+      mode, MODE[7:5]; direct mode when absent.
+    $ref: /schemas/types.yaml#/definitions/uint32
+    maximum: 7
+
+  dongwoon,vcm-prescale:
+    description: Prescaler of the SAC period, MODE[2:0].
+    $ref: /schemas/types.yaml#/definitions/uint32
+    maximum: 7
+    default: 0
+
+  dongwoon,sac-timing:
+    description: SAC period, 6.3 ms + value * 0.1 ms.
+    $ref: /schemas/types.yaml#/definitions/uint32
+    maximum: 0x3f
+    default: 0x20
+
 required:
   - compatible
   - reg
