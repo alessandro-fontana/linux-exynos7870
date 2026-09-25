@@ -46,6 +46,7 @@ struct dw9807_device {
 	struct v4l2_ctrl_handler ctrls_vcm;
 	struct v4l2_subdev sd;
 	struct regulator *vdd;
+	bool online;
 	u16 current_val;
 };
 
@@ -122,8 +123,13 @@ static int dw9807_set_ctrl(struct v4l2_ctrl *ctrl)
 	if (ctrl->id == V4L2_CID_FOCUS_ABSOLUTE) {
 		struct i2c_client *client = v4l2_get_subdevdata(&dev_vcm->sd);
 
+		int ret;
+
 		dev_vcm->current_val = ctrl->val;
-		return dw9807_set_dac(client, ctrl->val);
+		ret = dw9807_set_dac(client, ctrl->val);
+		if (!ret)
+			dev_vcm->online = true;
+		return ret;
 	}
 
 	return -EINVAL;
@@ -258,6 +264,9 @@ static int __maybe_unused dw9807_vcm_suspend(struct device *dev)
 	const char tx_data[2] = { DW9807_CTL_ADDR, 0x01 };
 	int ret, val;
 
+	if (!dw9807_dev->online)
+		return regulator_disable(dw9807_dev->vdd);
+
 	for (val = dw9807_dev->current_val & ~(DW9807_CTRL_STEPS - 1);
 	     val >= 0; val -= DW9807_CTRL_STEPS) {
 		ret = dw9807_set_dac(client, val);
@@ -293,12 +302,17 @@ static int  __maybe_unused dw9807_vcm_resume(struct device *dev)
 		return ret;
 	usleep_range(DW9807_PWR_ON_DELAY_US, DW9807_PWR_ON_DELAY_US + 1000);
 
-	/* Power on */
+	/*
+	 * Power on. The bus may be unusable while the sensor that shares the
+	 * module is off (the I2C pull-ups can sit on its I/O rail): stay
+	 * powered and let the control writes report the error, rather than
+	 * failing the resume and leaving runtime PM in an error state.
+	 */
 	ret = i2c_master_send(client, tx_data, sizeof(tx_data));
-	if (ret < 0) {
-		dev_err(&client->dev, "I2C write CTL fail ret = %d\n", ret);
-		regulator_disable(dw9807_dev->vdd);
-		return ret;
+	dw9807_dev->online = ret >= 0;
+	if (!dw9807_dev->online) {
+		dev_warn(&client->dev, "not responding: %d\n", ret);
+		return 0;
 	}
 
 	for (val = dw9807_dev->current_val % DW9807_CTRL_STEPS;
