@@ -103,6 +103,13 @@ config LEDS_RT4505
 	  And it's commonly used to compensate the illuminance for the camera
 	  inside the mobile product like as phones or tablets.
 
+config LEDS_SM5703
+	tristate "LED support for the Silicon Mitus SM5703 flash LED"
+	depends on MFD_SM5703
+	help
+	  This option enables support for the flash LED driver of the
+	  Silicon Mitus SM5703 charger and PMIC, torch and flash.
+
 config LEDS_RT8515
 	tristate "LED support for Richtek RT8515 flash/torch LED"
 	depends on GPIOLIB
