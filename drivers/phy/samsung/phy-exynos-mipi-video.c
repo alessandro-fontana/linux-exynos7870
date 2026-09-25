@@ -54,6 +54,13 @@ struct mipi_phy_device_desc {
 		 * releases the reset while the PHY is still isolated.
 		 */
 		bool enable_before_reset;
+		/*
+		 * A bit the vendor driver sets in the reset register before
+		 * powering the PHY on ("option" in its device tree) and never
+		 * clears. On exynos7870 CSIS1 needs it: with the bit clear,
+		 * the lanes stay in ULPS and no frame comes in.
+		 */
+		u32 option_val;
 	} phys[EXYNOS_MIPI_PHYS_NUM];
 };
 
@@ -258,6 +265,7 @@ static const struct mipi_phy_device_desc exynos7870_mipi_phy = {
 			.resetn_reg = 0,
 			.resetn_map = EXYNOS_MIPI_REGMAP_CAM0,
 			.enable_before_reset = true,
+			.option_val = BIT(3),
 		}, {
 			/* EXYNOS_MIPI_PHY_ID_CSIS2 */
 			.coupled_phy_id = EXYNOS_MIPI_PHY_ID_NONE,
@@ -301,6 +309,10 @@ static int __set_phy_state(const struct exynos_mipi_phy_desc *data,
 		 * and the DSIM registers clocked from the PHY hang the bus.
 		 */
 		if (on) {
+			if (data->option_val)
+				regmap_update_bits(resetn_map, data->resetn_reg,
+						   data->option_val,
+						   data->option_val);
 			regmap_update_bits(enable_map, data->enable_reg,
 					   data->enable_val, data->enable_val);
 			regmap_update_bits(resetn_map, data->resetn_reg,
