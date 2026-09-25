@@ -878,6 +878,55 @@
 			};
 		};
 
+		/*
+		 * CSIS0 and CSIS1, each a CSI-2 receiver with its own DMA. One
+		 * node because both write through sysmmu_isp0, and the SysMMU
+		 * driver takes one master device per SysMMU. Port 0 is CSIS0
+		 * (four lanes, PHY shared with DSIM0), port 1 is CSIS1.
+		 */
+		csis: csis@14420000 {
+			compatible = "samsung,exynos7870-csis";
+			reg = <0x14420000 0x10000>,
+			      <0x14460000 0x10000>;
+			interrupts = <GIC_SPI 144 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 145 IRQ_TYPE_LEVEL_HIGH>;
+
+			clocks = <&cmu_isp CLK_GOUT_ISP_CAM>,
+				 <&cmu_isp CLK_GOUT_ISP_CAM_HALF>;
+			clock-names = "aclk", "pclk";
+
+			phys = <&mipi_phy 0>, <&mipi_phy 2>;
+			phy-names = "csis0", "csis1";
+
+			iommus = <&sysmmu_isp0>;
+
+			status = "disabled";
+
+			ports {
+				#address-cells = <1>;
+				#size-cells = <0>;
+
+				csis0_port: port@0 {
+					reg = <0>;
+				};
+
+				csis1_port: port@1 {
+					reg = <1>;
+				};
+			};
+		};
+
+		/* The write masters of both CSIS DMA engines sit behind it. */
+		sysmmu_isp0: iommu@14470000 {
+			compatible = "samsung,exynos-sysmmu";
+			reg = <0x14470000 0x1000>;
+			interrupts = <GIC_SPI 128 IRQ_TYPE_LEVEL_HIGH>;
+			#iommu-cells = <0>;
+
+			clocks = <&cmu_isp CLK_GOUT_ISP_CAM>;
+			clock-names = "sysmmu";
+		};
+
 		cmu_isp: clock-controller@144d0000 {
 			compatible = "samsung,exynos7870-cmu-isp";
 			reg = <0x144d0000 0x1000>;
