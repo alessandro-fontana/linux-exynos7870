@@ -42,6 +42,24 @@ static const struct s5p_mfc_fmt formats[] = {
 		.num_planes	= 2,
 		.versions	= MFC_V5_BIT,
 	},
+	/*
+	 * Contiguous NV12/NV21 first: it is what gralloc allocates, and
+	 * clients pick the first format they support (Exynos7870).
+	 */
+	{
+		.fourcc		= V4L2_PIX_FMT_NV12,
+		.codec_mode	= S5P_MFC_CODEC_NONE,
+		.type		= MFC_FMT_RAW,
+		.num_planes	= 1,
+		.versions	= MFC_V10_BIT,
+	},
+	{
+		.fourcc		= V4L2_PIX_FMT_NV21,
+		.codec_mode	= S5P_MFC_CODEC_NONE,
+		.type		= MFC_FMT_RAW,
+		.num_planes	= 1,
+		.versions	= MFC_V10_BIT,
+	},
 	{
 		.fourcc		= V4L2_PIX_FMT_NV12M,
 		.codec_mode	= S5P_MFC_CODEC_NONE,
@@ -351,6 +369,37 @@ static int vidioc_g_fmt(struct file *file, void *priv, struct v4l2_format *f)
 	mfc_debug_enter();
 	pix_mp = &f->fmt.pix_mp;
 	if (f->type == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE &&
+	    ctx->state <= MFCINST_GOT_INST && ctx->src_queue_cnt == 0) {
+		/*
+		 * Nothing to parse yet (stateful API: the client sets up
+		 * CAPTURE before queuing the header): report the format it
+		 * asked for, the real one comes with V4L2_EVENT_SOURCE_CHANGE.
+		 */
+		unsigned int w = ctx->pre_width ? ctx->pre_width : 128;
+		unsigned int h = ctx->pre_height ? ctx->pre_height : 128;
+
+		pix_mp->width = w;
+		pix_mp->height = h;
+		pix_mp->field = V4L2_FIELD_NONE;
+		pix_mp->pixelformat = ctx->dst_fmt->fourcc;
+		pix_mp->num_planes = ctx->dst_fmt->num_planes;
+		if (ctx->dst_contig) {
+			pix_mp->pixelformat = ctx->dst_fmt->fourcc ==
+					      V4L2_PIX_FMT_NV21M ?
+					      V4L2_PIX_FMT_NV21 : V4L2_PIX_FMT_NV12;
+			pix_mp->num_planes = 1;
+		}
+		pix_mp->plane_fmt[0].bytesperline = w;
+		if (pix_mp->num_planes == 1) {
+			pix_mp->plane_fmt[0].sizeimage = w * h * 3 / 2;
+		} else {
+			pix_mp->plane_fmt[0].sizeimage = w * h;
+			pix_mp->plane_fmt[1].bytesperline = w;
+			pix_mp->plane_fmt[1].sizeimage = w * h / 2;
+		}
+		return 0;
+	}
+	if (f->type == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE &&
 	    (ctx->state == MFCINST_GOT_INST || ctx->state ==
 						MFCINST_RES_CHANGE_END)) {
 		/* If the MFC is parsing the header,
@@ -377,6 +426,16 @@ static int vidioc_g_fmt(struct file *file, void *priv, struct v4l2_format *f)
 		pix_mp->plane_fmt[0].sizeimage = ctx->luma_size;
 		pix_mp->plane_fmt[1].bytesperline = ctx->stride[1];
 		pix_mp->plane_fmt[1].sizeimage = ctx->chroma_size;
+		if (ctx->dst_contig) {
+			/* Chroma right after the luma rows, as gralloc lays out NV12. */
+			pix_mp->pixelformat = ctx->dst_fmt->fourcc ==
+					      V4L2_PIX_FMT_NV21M ?
+					      V4L2_PIX_FMT_NV21 : V4L2_PIX_FMT_NV12;
+			pix_mp->num_planes = 1;
+			pix_mp->height = ctx->contig_height;
+			pix_mp->plane_fmt[0].sizeimage =
+				ctx->stride[0] * ctx->contig_height * 3 / 2;
+		}
 		if (ctx->dst_fmt->fourcc == V4L2_PIX_FMT_YUV420M || ctx->dst_fmt->fourcc ==
 				V4L2_PIX_FMT_YVU420M) {
 			pix_mp->plane_fmt[2].bytesperline = ctx->stride[2];
@@ -452,7 +511,11 @@ static int vidioc_s_fmt(struct file *file, void *priv, struct v4l2_format *f)
 	pix_mp = &f->fmt.pix_mp;
 	if (ret)
 		return ret;
-	if (vb2_is_streaming(&ctx->vq_src) || vb2_is_streaming(&ctx->vq_dst)) {
+	/* Only the queue being configured must be idle (stateful API). */
+	if ((f->type == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE &&
+	     vb2_is_busy(&ctx->vq_dst)) ||
+	    (f->type == V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE &&
+	     vb2_is_busy(&ctx->vq_src))) {
 		v4l2_err(&dev->v4l2_dev, "%s queue busy\n", __func__);
 		ret = -EBUSY;
 		goto out;
@@ -460,6 +523,23 @@ static int vidioc_s_fmt(struct file *file, void *priv, struct v4l2_format *f)
 	if (f->type == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE) {
 		/* dst_fmt is validated by call to vidioc_try_fmt */
 		ctx->dst_fmt = find_format(f, MFC_FMT_RAW);
+		ctx->dst_contig = ctx->dst_fmt->num_planes == 1;
+		if (ctx->dst_contig) {
+			/* Internally the MFC writes NV12M/NV21M planes. */
+			struct v4l2_format f2 = *f;
+
+			f2.fmt.pix_mp.pixelformat =
+				ctx->dst_fmt->fourcc == V4L2_PIX_FMT_NV21 ?
+				V4L2_PIX_FMT_NV21M : V4L2_PIX_FMT_NV12M;
+			ctx->dst_fmt = find_format(&f2, MFC_FMT_RAW);
+		}
+		if (ctx->state < MFCINST_HEAD_PARSED) {
+			ctx->pre_width = pix_mp->width;
+			ctx->pre_height = pix_mp->height;
+		} else if (ctx->state == MFCINST_HEAD_PARSED) {
+			/* The layout depends on the format: recompute it. */
+			s5p_mfc_hw_call(dev->mfc_ops, dec_calc_dpb_size, ctx);
+		}
 		ret = 0;
 		goto out;
 	} else if (f->type == V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE) {
@@ -473,7 +553,8 @@ static int vidioc_s_fmt(struct file *file, void *priv, struct v4l2_format *f)
 			pix_mp->plane_fmt[0].sizeimage = ctx->dec_src_buf_size =
 								DEF_CPB_SIZE;
 		else if (pix_mp->plane_fmt[0].sizeimage > buf_size->cpb)
-			ctx->dec_src_buf_size = buf_size->cpb;
+			pix_mp->plane_fmt[0].sizeimage = ctx->dec_src_buf_size =
+								buf_size->cpb;
 		else
 			ctx->dec_src_buf_size = pix_mp->plane_fmt[0].sizeimage;
 		pix_mp->plane_fmt[0].bytesperline = 0;
@@ -551,8 +632,24 @@ static int reqbufs_capture(struct s5p_mfc_dev *dev, struct s5p_mfc_ctx *ctx,
 		ret = vb2_reqbufs(&ctx->vq_dst, reqbufs);
 		if (ret)
 			goto out;
-		s5p_mfc_hw_call(dev->mfc_ops, release_codec_buffers, ctx);
+		if (!ctx->dst_placeholder)
+			s5p_mfc_hw_call(dev->mfc_ops, release_codec_buffers,
+					ctx);
 		ctx->dst_bufs_cnt = 0;
+		ctx->dst_placeholder = false;
+		ctx->capture_state = QUEUE_FREE;
+	} else if (ctx->capture_state == QUEUE_FREE &&
+		   ctx->state < MFCINST_HEAD_PARSED) {
+		/*
+		 * Stateful API: CAPTURE buffers before the header is known.
+		 * They only carry a possible early EOS; the MFC never sees
+		 * them, the client reallocates on V4L2_EVENT_SOURCE_CHANGE.
+		 */
+		ret = vb2_reqbufs(&ctx->vq_dst, reqbufs);
+		if (ret)
+			goto out;
+		ctx->dst_placeholder = true;
+		ctx->capture_state = QUEUE_BUFS_REQUESTED;
 	} else if (ctx->capture_state == QUEUE_FREE) {
 		WARN_ON(ctx->dst_bufs_cnt != 0);
 		mfc_debug(2, "Allocating %d buffers for CAPTURE queue\n",
@@ -573,6 +670,14 @@ static int reqbufs_capture(struct s5p_mfc_dev *dev, struct s5p_mfc_ctx *ctx,
 			ctx->capture_state = QUEUE_FREE;
 			goto out;
 		}
+
+		/*
+		 * DMABUF buffers get their addresses when first queued
+		 * (s5p_mfc_buf_init): the DPB is set up once all of them
+		 * have been, asynchronously.
+		 */
+		if (reqbufs->memory == V4L2_MEMORY_DMABUF)
+			goto out;
 
 		WARN_ON(ctx->dst_bufs_cnt != ctx->total_dpb_count);
 		ctx->capture_state = QUEUE_BUFS_MMAPED;
@@ -600,8 +705,9 @@ static int vidioc_reqbufs(struct file *file, void *priv,
 	struct s5p_mfc_dev *dev = video_drvdata(file);
 	struct s5p_mfc_ctx *ctx = file_to_ctx(file);
 
-	if (reqbufs->memory != V4L2_MEMORY_MMAP) {
-		mfc_debug(2, "Only V4L2_MEMORY_MMAP is supported\n");
+	if (reqbufs->memory != V4L2_MEMORY_MMAP &&
+	    reqbufs->memory != V4L2_MEMORY_DMABUF) {
+		mfc_debug(2, "Only MMAP and DMABUF are supported\n");
 		return -EINVAL;
 	}
 
@@ -623,19 +729,20 @@ static int vidioc_querybuf(struct file *file, void *priv,
 	int ret;
 	int i;
 
-	if (buf->memory != V4L2_MEMORY_MMAP) {
-		mfc_err("Only mmapped buffers can be used\n");
+	if (buf->memory != V4L2_MEMORY_MMAP &&
+	    buf->memory != V4L2_MEMORY_DMABUF) {
+		mfc_err("Only MMAP and DMABUF buffers can be used\n");
 		return -EINVAL;
 	}
 	mfc_debug(2, "State: %d, buf->type: %d\n", ctx->state, buf->type);
-	if (ctx->state == MFCINST_GOT_INST &&
-			buf->type == V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE) {
+	if (buf->type == V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE) {
 		ret = vb2_querybuf(&ctx->vq_src, buf);
-	} else if (ctx->state == MFCINST_RUNNING &&
-			buf->type == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE) {
+	} else if (buf->type == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE) {
 		ret = vb2_querybuf(&ctx->vq_dst, buf);
-		for (i = 0; i < buf->length; i++)
-			buf->m.planes[i].m.mem_offset += DST_QUEUE_OFF_BASE;
+		if (buf->memory == V4L2_MEMORY_MMAP)
+			for (i = 0; i < buf->length; i++)
+				buf->m.planes[i].m.mem_offset +=
+							DST_QUEUE_OFF_BASE;
 	} else {
 		mfc_err("vidioc_querybuf called in an inappropriate state\n");
 		ret = -EINVAL;
@@ -770,6 +877,11 @@ static int s5p_mfc_dec_g_v_ctrl(struct v4l2_ctrl *ctrl)
 		if (ctx->state >= MFCINST_HEAD_PARSED &&
 		    ctx->state < MFCINST_ABORT) {
 			ctrl->val = ctx->pb_count;
+			break;
+		} else if (ctx->state <= MFCINST_GOT_INST &&
+			   ctx->src_queue_cnt == 0) {
+			/* Nothing to parse yet: one placeholder buffer. */
+			ctrl->val = 1;
 			break;
 		} else if (ctx->state != MFCINST_INIT &&
 				ctx->state != MFCINST_RES_CHANGE_END) {
@@ -913,6 +1025,7 @@ static int vidioc_decoder_cmd(struct file *file, void *priv,
 		    ctx->state == MFCINST_FINISHING)
 			ctx->state = MFCINST_RUNNING;
 		spin_unlock_irqrestore(&dev->irqlock, flags);
+		vb2_clear_last_buffer_dequeued(&ctx->vq_dst);
 		break;
 	default:
 		return -EINVAL;
@@ -980,6 +1093,26 @@ static int s5p_mfc_queue_setup(struct vb2_queue *vq,
 			*buf_count = MFC_MAX_BUFFERS;
 	/* Video capture for decoding (destination)
 	 * this can be set after the header was parsed */
+	} else if (ctx->state < MFCINST_HEAD_PARSED &&
+		   vq->type == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE) {
+		/* Placeholder CAPTURE buffers, see reqbufs_capture(). */
+		unsigned int w = ctx->pre_width ? ctx->pre_width : 128;
+		unsigned int h = ctx->pre_height ? ctx->pre_height : 128;
+
+		*plane_count = ctx->dst_contig ? 1 : 2;
+		if (*buf_count < 1)
+			*buf_count = 1;
+		if (*buf_count > MFC_MAX_BUFFERS)
+			*buf_count = MFC_MAX_BUFFERS;
+		if (ctx->dst_contig) {
+			psize[0] = w * h * 3 / 2;
+		} else {
+			psize[0] = w * h;
+			psize[1] = w * h / 2;
+		}
+		alloc_devs[0] = ctx->dev->mem_dev[BANK_L_CTX];
+		alloc_devs[1] = ctx->dev->mem_dev[BANK_L_CTX];
+		return 0;
 	} else if (ctx->state == MFCINST_HEAD_PARSED &&
 		   vq->type == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE) {
 		/* Output plane count is 2 - one for Y and one for CbCr */
@@ -988,13 +1121,25 @@ static int s5p_mfc_queue_setup(struct vb2_queue *vq,
 			mfc_err("invalid format\n");
 			return -EINVAL;
 		}
-		*plane_count = format->comp_planes;
+		*plane_count = ctx->dst_contig ? 1 : format->comp_planes;
 
 		/* Setup buffer count */
 		if (*buf_count < ctx->pb_count)
 			*buf_count = ctx->pb_count;
-		if (*buf_count > ctx->pb_count + MFC_MAX_EXTRA_DPB)
+		if (vq->memory == V4L2_MEMORY_DMABUF) {
+			/*
+			 * The DPB is given to the MFC once every buffer has
+			 * been queued (their addresses come with the dmabufs),
+			 * so the client must be able to hold all of them at
+			 * once: Android's BufferQueue grants about 23. Keep a
+			 * margin above the DPB for the frames being displayed.
+			 */
+			*buf_count = min_t(unsigned int, ctx->pb_count + 8, 20);
+			if (*buf_count < ctx->pb_count)
+				*buf_count = ctx->pb_count;
+		} else if (*buf_count > ctx->pb_count + MFC_MAX_EXTRA_DPB) {
 			*buf_count = ctx->pb_count + MFC_MAX_EXTRA_DPB;
+		}
 		if (*buf_count > MFC_MAX_BUFFERS)
 			*buf_count = MFC_MAX_BUFFERS;
 	} else {
@@ -1008,6 +1153,8 @@ static int s5p_mfc_queue_setup(struct vb2_queue *vq,
 	    vq->type == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE) {
 		psize[0] = ctx->luma_size;
 		psize[1] = ctx->chroma_size;
+		if (ctx->dst_contig)
+			psize[0] = ctx->stride[0] * ctx->contig_height * 3 / 2;
 		if (ctx->dst_fmt->fourcc == V4L2_PIX_FMT_YUV420M || ctx->dst_fmt->fourcc ==
 				V4L2_PIX_FMT_YVU420M)
 			psize[2] = ctx->chroma_size_1;
@@ -1037,8 +1184,30 @@ static int s5p_mfc_buf_init(struct vb2_buffer *vb)
 	unsigned int i;
 
 	if (vq->type == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE) {
+		if (ctx->dst_placeholder) {
+			/* Never given to the MFC, see reqbufs_capture(). */
+			ctx->dst_bufs[vb->index].b = vbuf;
+			return 0;
+		}
 		if (ctx->capture_state == QUEUE_BUFS_MMAPED)
 			return 0;
+		if (ctx->dst_contig) {
+			dma_addr_t luma = vb2_dma_contig_plane_dma_addr(vb, 0);
+			unsigned long need = ctx->stride[0] * ctx->contig_height *
+					     3 / 2;
+
+			if (!luma || vb2_plane_size(vb, 0) < need) {
+				mfc_err("CAPTURE buffer too small: %lu < %lu\n",
+					vb2_plane_size(vb, 0), need);
+				return -EINVAL;
+			}
+			i = vb->index;
+			ctx->dst_bufs[i].b = vbuf;
+			ctx->dst_bufs[i].cookie.raw.luma = luma;
+			ctx->dst_bufs[i].cookie.raw.chroma =
+				luma + ctx->stride[0] * ctx->contig_height;
+			goto registered;
+		}
 		for (i = 0; i < ctx->dst_fmt->num_planes; i++) {
 			if (IS_ERR_OR_NULL(ERR_PTR(
 					vb2_dma_contig_plane_dma_addr(vb, i)))) {
@@ -1069,7 +1238,16 @@ static int s5p_mfc_buf_init(struct vb2_buffer *vb)
 			ctx->dst_bufs[i].cookie.raw.chroma_1 =
 					vb2_dma_contig_plane_dma_addr(vb, 2);
 		}
+registered:
 		ctx->dst_bufs_cnt++;
+		/*
+		 * DMABUF: the last buffer of the set has its address, the
+		 * DPB can be given to the MFC (see reqbufs_capture()).
+		 */
+		if (vq->memory == V4L2_MEMORY_DMABUF &&
+		    ctx->capture_state == QUEUE_BUFS_REQUESTED &&
+		    ctx->dst_bufs_cnt == ctx->total_dpb_count)
+			ctx->capture_state = QUEUE_BUFS_MMAPED;
 	} else if (vq->type == V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE) {
 		if (IS_ERR_OR_NULL(ERR_PTR(
 					vb2_dma_contig_plane_dma_addr(vb, 0)))) {
@@ -1131,7 +1309,9 @@ static void s5p_mfc_stop_streaming(struct vb2_queue *q)
 		s5p_mfc_cleanup_queue(&ctx->dst_queue, &ctx->vq_dst);
 		INIT_LIST_HEAD(&ctx->dst_queue);
 		ctx->dst_queue_cnt = 0;
-		ctx->dpb_flush_flag = 1;
+		/* A DPB flush only follows a streamoff while decoding. */
+		if (ctx->state == MFCINST_RUNNING)
+			ctx->dpb_flush_flag = 1;
 		ctx->dec_dst_flag = 0;
 		if (IS_MFCV6_PLUS(dev) && (ctx->state == MFCINST_RUNNING)) {
 			ctx->state = MFCINST_FLUSH;
