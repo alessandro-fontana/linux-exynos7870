@@ -454,8 +454,15 @@ static void s5p_mfc_handle_frame(struct s5p_mfc_ctx *ctx,
 								list);
 		ctx->consumed_stream += s5p_mfc_hw_call(dev->mfc_ops,
 						get_consumed_stream, dev);
+		/*
+		 * Not for HEVC: v4l2_codec2 sends one access unit per buffer,
+		 * and the rerun passes the whole length again with the offset,
+		 * so the firmware reads past the data, and loops if it reports
+		 * nothing consumed.
+		 */
 		if (ctx->codec_mode != S5P_MFC_CODEC_H264_DEC &&
 			ctx->codec_mode != S5P_MFC_CODEC_VP8_DEC &&
+			ctx->codec_mode != S5P_MFC_CODEC_HEVC_DEC &&
 			ctx->consumed_stream + STUFF_BYTE <
 			src_buf->b->vb2_buf.planes[0].bytesused) {
 			/* Run MFC again on the same buffer */
@@ -587,6 +594,16 @@ static void s5p_mfc_handle_seq_done(struct s5p_mfc_ctx *ctx,
 				ctx->head_processed = 0;
 			else
 				ctx->head_processed = 1;
+		} else if (ctx->codec_mode == S5P_MFC_CODEC_VP8_DEC ||
+			   ctx->codec_mode == S5P_MFC_CODEC_H263_DEC) {
+			/*
+			 * The buffer that carried the header is the first key
+			 * frame: decode it, rather than completing it unused and
+			 * decoding the next frames against an empty reference.
+			 * H.263 has no header of its own either: the picture
+			 * header of the first frame is the one parsed.
+			 */
+			ctx->head_processed = 0;
 		} else {
 			ctx->head_processed = 1;
 		}

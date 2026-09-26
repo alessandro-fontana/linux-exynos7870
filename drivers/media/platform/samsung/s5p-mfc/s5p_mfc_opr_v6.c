@@ -253,6 +253,9 @@ static int s5p_mfc_alloc_codec_buffers_v6(struct s5p_mfc_ctx *ctx)
 		break;
 	case S5P_MFC_CODEC_HEVC_DEC:
 		mfc_debug(2, "Use min scratch buffer size\n");
+		/* Aligned, or the MV buffers placed after it eat the margin */
+		ctx->scratch_buf_size = ALIGN(ctx->scratch_buf_size,
+				S5P_FIMV_SCRATCH_BUFFER_ALIGN_V6);
 		ctx->bank1.size =
 			ctx->scratch_buf_size +
 			(ctx->mv_count * ctx->mv_size);
@@ -363,6 +366,12 @@ static int s5p_mfc_alloc_codec_buffers_v6(struct s5p_mfc_ctx *ctx)
 
 	/* Allocate only if memory from bank 1 is necessary */
 	if (ctx->bank1.size > 0) {
+		/*
+		 * The IOMMU aligns an allocation to its size: at least the
+		 * bank alignment, checked below, even for a small VP8 stream.
+		 */
+		ctx->bank1.size = max_t(size_t, ctx->bank1.size,
+					1 << MFC_BANK1_ALIGN_ORDER);
 		ret = s5p_mfc_alloc_generic_buf(dev, BANK_L_CTX, &ctx->bank1);
 		if (ret) {
 			mfc_err("Failed to allocate Bank1 memory\n");
@@ -486,6 +495,13 @@ static int calc_plane(int width, int height)
 static void s5p_mfc_dec_calc_dpb_size_v6(struct s5p_mfc_ctx *ctx)
 {
 	struct s5p_mfc_dev *dev = ctx->dev;
+	/*
+	 * HEVC pictures are made of 64x64 CTBs: size the planes for whole
+	 * ones, in case the firmware writes them (720 lines are 11.25 CTBs),
+	 * since a write past a buffer is a SysMMU fault.
+	 */
+	unsigned int height = ctx->codec_mode == S5P_MFC_CODEC_HEVC_DEC ?
+			      ALIGN(ctx->img_height, 64) : ctx->img_height;
 	ctx->buf_width = ALIGN(ctx->img_width, S5P_FIMV_NV12MT_HALIGN_V6);
 	ctx->buf_height = ALIGN(ctx->img_height, S5P_FIMV_NV12MT_VALIGN_V6);
 	ctx->chroma_size_1 = 0;
@@ -501,8 +517,8 @@ static void s5p_mfc_dec_calc_dpb_size_v6(struct s5p_mfc_ctx *ctx)
 		if (ctx->dst_contig)
 			ctx->stride[0] = ALIGN(ctx->img_width, 32);
 		ctx->stride[1] = ctx->stride[0];
-		ctx->luma_size = calc_plane(ctx->stride[0], ctx->img_height);
-		ctx->chroma_size = calc_plane(ctx->stride[1], (ctx->img_height / 2));
+		ctx->luma_size = calc_plane(ctx->stride[0], height);
+		ctx->chroma_size = calc_plane(ctx->stride[1], (height / 2));
 		break;
 	case V4L2_PIX_FMT_YUV420M:
 	case V4L2_PIX_FMT_YVU420M:
@@ -676,10 +692,10 @@ static int s5p_mfc_set_dec_frame_buffer_v6(struct s5p_mfc_ctx *ctx)
 
 	if (ctx->codec_mode == S5P_FIMV_CODEC_H264_DEC ||
 			ctx->codec_mode == S5P_FIMV_CODEC_H264_MVC_DEC ||
-			ctx->codec_mode == S5P_FIMV_CODEC_HEVC_DEC) {
+			ctx->codec_mode == S5P_FIMV_CODEC_HEVC_DEC)
 		writel(ctx->mv_size, mfc_regs->d_mv_buffer_size);
-		writel(ctx->mv_count, mfc_regs->d_num_mv);
-	}
+	/* Shared by the instances: a VP8 one would inherit a stale count. */
+	writel(ctx->mv_count, mfc_regs->d_num_mv);
 
 	frame_size = ctx->luma_size;
 	frame_size_ch = ctx->chroma_size;
