@@ -296,11 +296,26 @@ static int __maybe_unused dw9807_vcm_suspend(struct device *dev)
 	if (!dw9807_dev->online)
 		return regulator_disable(dw9807_dev->vdd);
 
+	/*
+	 * The lens is usually closed after the sensor has stopped, and with
+	 * the sensor off the bus of the module does not answer: every write
+	 * would wait for the controller timeout, 300 ms, and the ramp takes
+	 * some forty of them. Probe once, and give up on the first failure:
+	 * the lens falls back to rest when the power goes anyway.
+	 */
+	if (dw9807_i2c_check(client) < 0) {
+		dev_dbg(dev, "bus down, powering off without the ramp\n");
+		dw9807_dev->online = false;
+		return regulator_disable(dw9807_dev->vdd);
+	}
+
 	for (val = dw9807_dev->current_val & ~(DW9807_CTRL_STEPS - 1);
 	     val >= 0; val -= DW9807_CTRL_STEPS) {
 		ret = dw9807_set_dac(client, val);
-		if (ret)
+		if (ret) {
 			dev_err_once(dev, "%s I2C failure: %d", __func__, ret);
+			return regulator_disable(dw9807_dev->vdd);
+		}
 		usleep_range(DW9807_CTRL_DELAY_US, DW9807_CTRL_DELAY_US + 10);
 	}
 
