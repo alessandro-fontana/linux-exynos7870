@@ -928,7 +928,8 @@ static int vidioc_g_selection(struct file *file, void *priv,
 		mfc_err("Can not get compose information\n");
 		return -EINVAL;
 	}
-	if (ctx->src_fmt->fourcc == V4L2_PIX_FMT_H264) {
+	if (ctx->src_fmt->fourcc == V4L2_PIX_FMT_H264 ||
+	    ctx->src_fmt->fourcc == V4L2_PIX_FMT_HEVC) {
 		left = s5p_mfc_hw_call(dev->mfc_ops, get_crop_info_h, ctx);
 		right = left >> S5P_FIMV_SHARED_CROP_RIGHT_SHIFT;
 		left = left & S5P_FIMV_SHARED_CROP_LEFT_MASK;
@@ -1130,13 +1131,12 @@ static int s5p_mfc_queue_setup(struct vb2_queue *vq,
 			/*
 			 * The DPB is given to the MFC once every buffer has
 			 * been queued (their addresses come with the dmabufs),
-			 * so the client must be able to hold all of them at
-			 * once: Android's BufferQueue grants about 23. Keep a
-			 * margin above the DPB for the frames being displayed.
+			 * so the client must hold all of them at once: ask for
+			 * the DPB plus the four the client adds to it, which
+			 * fits in what an Android surface grants.
 			 */
-			*buf_count = min_t(unsigned int, ctx->pb_count + 8, 20);
-			if (*buf_count < ctx->pb_count)
-				*buf_count = ctx->pb_count;
+			*buf_count = clamp_t(unsigned int, *buf_count,
+					     ctx->pb_count, ctx->pb_count + 4);
 		} else if (*buf_count > ctx->pb_count + MFC_MAX_EXTRA_DPB) {
 			*buf_count = ctx->pb_count + MFC_MAX_EXTRA_DPB;
 		}
