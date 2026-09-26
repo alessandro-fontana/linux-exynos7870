@@ -352,10 +352,16 @@ static void s5p_mfc_handle_frame_new(struct s5p_mfc_ctx *ctx, unsigned int err)
 			else
 				dst_buf->b->field =
 							V4L2_FIELD_INTERLACED;
-			vb2_set_plane_payload(&dst_buf->b->vb2_buf, 0,
-						ctx->luma_size);
-			vb2_set_plane_payload(&dst_buf->b->vb2_buf, 1,
-						ctx->chroma_size);
+			if (ctx->dst_contig) {
+				vb2_set_plane_payload(&dst_buf->b->vb2_buf, 0,
+					ctx->stride[0] * ctx->contig_height *
+					3 / 2);
+			} else {
+				vb2_set_plane_payload(&dst_buf->b->vb2_buf, 0,
+						      ctx->luma_size);
+				vb2_set_plane_payload(&dst_buf->b->vb2_buf, 1,
+						      ctx->chroma_size);
+			}
 			clear_bit(dst_buf->b->vb2_buf.index,
 							&ctx->dec_dst_flag);
 
@@ -403,18 +409,22 @@ static void s5p_mfc_handle_frame(struct s5p_mfc_ctx *ctx,
 	/* All frames remaining in the buffer have been extracted  */
 	if (dst_frame_status == S5P_FIMV_DEC_STATUS_DECODING_EMPTY) {
 		if (ctx->state == MFCINST_RES_CHANGE_FLUSH) {
-			static const struct v4l2_event ev_src_ch = {
-				.type = V4L2_EVENT_SOURCE_CHANGE,
-				.u.src_change.changes =
-					V4L2_EVENT_SRC_CH_RESOLUTION,
-			};
-
+			/*
+			 * The new header is parsed next, and the event for the
+			 * new format is sent then (s5p_mfc_handle_seq_done):
+			 * a second one here would make the client reallocate
+			 * in the wrong state.
+			 */
 			s5p_mfc_handle_frame_all_extracted(ctx);
 			ctx->state = MFCINST_RES_CHANGE_END;
-			v4l2_event_queue_fh(&ctx->fh, &ev_src_ch);
 
 			goto leave_handle_frame;
-		} else {
+		} else if (ctx->state == MFCINST_FINISHING) {
+			/*
+			 * Only a drain ends the stream: while running, "empty"
+			 * only means that this input produced no picture
+			 * (a buffer with just SPS/PPS, for instance).
+			 */
 			s5p_mfc_handle_frame_all_extracted(ctx);
 		}
 	}
@@ -540,10 +550,21 @@ static void s5p_mfc_handle_seq_done(struct s5p_mfc_ctx *ctx,
 		if (FW_HAS_E_MIN_SCRATCH_BUF(dev))
 			ctx->scratch_buf_size = s5p_mfc_hw_call(dev->mfc_ops,
 						get_min_scratch_buf_size, dev);
-		if (ctx->img_width == 0 || ctx->img_height == 0)
+		if (ctx->img_width == 0 || ctx->img_height == 0) {
 			ctx->state = MFCINST_ERROR;
-		else
+		} else {
+			/* Stateful API: tell the client the stream format. */
+			static const struct v4l2_event ev_src_ch = {
+				.type = V4L2_EVENT_SOURCE_CHANGE,
+				.u.src_change.changes =
+					V4L2_EVENT_SRC_CH_RESOLUTION,
+			};
+
 			ctx->state = MFCINST_HEAD_PARSED;
+			dev_dbg(&dev->plat_dev->dev, "header: %ux%u, DPB %d\n",
+				ctx->img_width, ctx->img_height, ctx->pb_count);
+			v4l2_event_queue_fh(&ctx->fh, &ev_src_ch);
+		}
 
 		if ((ctx->codec_mode == S5P_MFC_CODEC_H264_DEC ||
 			ctx->codec_mode == S5P_MFC_CODEC_H264_MVC_DEC) &&
@@ -879,8 +900,15 @@ static int s5p_mfc_open(struct file *file)
 	q->drv_priv = ctx;
 	q->lock = &dev->mfc_mutex;
 	if (vdev == dev->vfd_dec) {
-		q->io_modes = VB2_MMAP;
+		/* DMABUF: Android's Codec2 V4L2 component imports its buffers. */
+		q->io_modes = VB2_MMAP | VB2_DMABUF;
 		q->ops = get_dec_queue_ops();
+		/*
+		 * The decoded pictures are also the reference frames the MFC
+		 * reads back: an imported dmabuf mapped DMA_FROM_DEVICE is
+		 * write-only in the IOMMU, and the first P frame faults.
+		 */
+		q->bidirectional = 1;
 	} else if (vdev == dev->vfd_enc) {
 		q->io_modes = VB2_MMAP | VB2_USERPTR | VB2_DMABUF;
 		q->ops = get_enc_queue_ops();
@@ -906,7 +934,8 @@ static int s5p_mfc_open(struct file *file)
 	q->drv_priv = ctx;
 	q->lock = &dev->mfc_mutex;
 	if (vdev == dev->vfd_dec) {
-		q->io_modes = VB2_MMAP;
+		/* DMABUF: Android's Codec2 V4L2 component imports its buffers. */
+		q->io_modes = VB2_MMAP | VB2_DMABUF;
 		q->ops = get_dec_queue_ops();
 	} else if (vdev == dev->vfd_enc) {
 		q->io_modes = VB2_MMAP | VB2_USERPTR | VB2_DMABUF;
@@ -915,6 +944,12 @@ static int s5p_mfc_open(struct file *file)
 		ret = -ENOENT;
 		goto err_queue_init;
 	}
+	/*
+	 * The v10 firmware also writes to the stream buffers it reads (the
+	 * decoder uses the CPB as work space): an imported dmabuf mapped
+	 * DMA_TO_DEVICE is read-only in the IOMMU, and the write faults.
+	 */
+	q->bidirectional = 1;
 	/* One way to indicate end-of-stream for MFC is to set the
 	 * bytesused == 0. However by default videobuf2 handles bytesused
 	 * equal to 0 as a special case and changes its value to the size

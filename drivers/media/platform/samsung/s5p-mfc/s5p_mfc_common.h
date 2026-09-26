@@ -702,6 +702,17 @@ struct s5p_mfc_ctx {
 
 	int pb_count;
 	int total_dpb_count;
+	/*
+	 * Stateful API with DMABUF (Exynos7870): CAPTURE buffers set up
+	 * before the header is parsed (placeholders, never given to the
+	 * MFC), their size, and a single-plane NV12/NV21 layout with the
+	 * chroma right after the luma.
+	 */
+	bool dst_placeholder;
+	bool dst_contig;
+	unsigned int pre_width, pre_height;
+	/* Contiguous layout: rows of luma before the chroma (>= buf_height). */
+	unsigned int contig_height;
 	int mv_count;
 	/* Buffers */
 	struct s5p_mfc_priv_buf ctx;

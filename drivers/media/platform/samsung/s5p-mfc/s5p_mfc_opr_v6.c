@@ -497,7 +497,10 @@ static void s5p_mfc_dec_calc_dpb_size_v6(struct s5p_mfc_ctx *ctx)
 	case V4L2_PIX_FMT_NV12M:
 	case V4L2_PIX_FMT_NV21M:
 		ctx->stride[0] = ALIGN(ctx->img_width, S5P_FIMV_NV12MT_HALIGN_V6);
-		ctx->stride[1] = ALIGN(ctx->img_width, S5P_FIMV_NV12MT_HALIGN_V6);
+		/* Contiguous NV12 in a gralloc buffer: its pitch is 32-aligned. */
+		if (ctx->dst_contig)
+			ctx->stride[0] = ALIGN(ctx->img_width, 32);
+		ctx->stride[1] = ctx->stride[0];
 		ctx->luma_size = calc_plane(ctx->stride[0], ctx->img_height);
 		ctx->chroma_size = calc_plane(ctx->stride[1], (ctx->img_height / 2));
 		break;
@@ -517,6 +520,23 @@ static void s5p_mfc_dec_calc_dpb_size_v6(struct s5p_mfc_ctx *ctx)
 		ctx->luma_size += S5P_FIMV_D_ALIGN_PLANE_SIZE_V8;
 		ctx->chroma_size += S5P_FIMV_D_ALIGN_PLANE_SIZE_V8;
 		ctx->chroma_size_1 += S5P_FIMV_D_ALIGN_PLANE_SIZE_V8;
+	}
+
+	/*
+	 * Contiguous layout: enough luma rows for the plane size the MFC
+	 * uses, and half as many again for the chroma, which starts right
+	 * after them (stride * contig_height), as in a gralloc NV12 buffer
+	 * of that height.
+	 */
+	ctx->contig_height = ctx->buf_height;
+	if (ctx->dst_contig) {
+		unsigned int rows = max_t(unsigned int,
+					 DIV_ROUND_UP(ctx->luma_size, ctx->stride[0]),
+					DIV_ROUND_UP(2 * ctx->chroma_size,
+						     ctx->stride[0]));
+
+		ctx->contig_height = ALIGN(max_t(unsigned int, rows,
+						 ctx->buf_height), 16);
 	}
 
 	if (ctx->codec_mode == S5P_MFC_CODEC_H264_DEC ||
