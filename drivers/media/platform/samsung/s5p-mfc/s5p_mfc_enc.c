@@ -307,6 +307,7 @@ static struct mfc_control controls[] = {
 		.default_value = V4L2_MPEG_VIDEO_H264_PROFILE_BASELINE,
 		.menu_skip_mask = ~(
 				(1 << V4L2_MPEG_VIDEO_H264_PROFILE_BASELINE) |
+				(1 << V4L2_MPEG_VIDEO_H264_PROFILE_CONSTRAINED_BASELINE) |
 				(1 << V4L2_MPEG_VIDEO_H264_PROFILE_MAIN) |
 				(1 << V4L2_MPEG_VIDEO_H264_PROFILE_HIGH)
 				),
@@ -315,7 +316,7 @@ static struct mfc_control controls[] = {
 		.id = V4L2_CID_MPEG_VIDEO_H264_LEVEL,
 		.type = V4L2_CTRL_TYPE_MENU,
 		.minimum = V4L2_MPEG_VIDEO_H264_LEVEL_1_0,
-		.maximum = V4L2_MPEG_VIDEO_H264_LEVEL_4_0,
+		.maximum = V4L2_MPEG_VIDEO_H264_LEVEL_5_1,
 		.default_value = V4L2_MPEG_VIDEO_H264_LEVEL_1_0,
 	},
 	{
@@ -1207,12 +1208,12 @@ static int enc_pre_frame_start(struct s5p_mfc_ctx *ctx)
 	unsigned int dst_size;
 
 	src_mb = list_entry(ctx->src_queue.next, struct s5p_mfc_buf, list);
-	src_y_addr = vb2_dma_contig_plane_dma_addr(&src_mb->b->vb2_buf, 0);
-	src_c_addr = vb2_dma_contig_plane_dma_addr(&src_mb->b->vb2_buf, 1);
+	src_y_addr = s5p_mfc_src_plane_addr(&src_mb->b->vb2_buf, 0);
+	src_c_addr = s5p_mfc_src_plane_addr(&src_mb->b->vb2_buf, 1);
 	if (ctx->src_fmt->fourcc == V4L2_PIX_FMT_YUV420M || ctx->src_fmt->fourcc ==
 			V4L2_PIX_FMT_YVU420M)
 		src_c_1_addr =
-			vb2_dma_contig_plane_dma_addr(&src_mb->b->vb2_buf, 2);
+			s5p_mfc_src_plane_addr(&src_mb->b->vb2_buf, 2);
 	else
 		src_c_1_addr = 0;
 	s5p_mfc_hw_call(dev->mfc_ops, set_enc_frame_buffer, ctx,
@@ -1247,20 +1248,21 @@ static int enc_post_frame_start(struct s5p_mfc_ctx *ctx)
 		s5p_mfc_hw_call(dev->mfc_ops, get_enc_frame_buffer, ctx,
 				&enc_y_addr, &enc_c_addr, &enc_c_1_addr);
 		list_for_each_entry(mb_entry, &ctx->src_queue, list) {
-			mb_y_addr = vb2_dma_contig_plane_dma_addr(
+			mb_y_addr = s5p_mfc_src_plane_addr(
 					&mb_entry->b->vb2_buf, 0);
-			mb_c_addr = vb2_dma_contig_plane_dma_addr(
+			mb_c_addr = s5p_mfc_src_plane_addr(
 					&mb_entry->b->vb2_buf, 1);
 			if (ctx->src_fmt->fourcc ==
 					V4L2_PIX_FMT_YUV420M ||
 					ctx->src_fmt->fourcc ==
 					V4L2_PIX_FMT_YVU420M)
-				mb_c_1_addr = vb2_dma_contig_plane_dma_addr
+				mb_c_1_addr = s5p_mfc_src_plane_addr
 					(&mb_entry->b->vb2_buf, 2);
 			else
 				mb_c_1_addr = 0;
 			if (enc_y_addr == mb_y_addr && enc_c_addr == mb_c_addr && enc_c_1_addr
 					== mb_c_1_addr) {
+				ctx->enc_last_ts = mb_entry->b->vb2_buf.timestamp;
 				list_del(&mb_entry->list);
 				ctx->src_queue_cnt--;
 				vb2_buffer_done(&mb_entry->b->vb2_buf,
@@ -1269,19 +1271,20 @@ static int enc_post_frame_start(struct s5p_mfc_ctx *ctx)
 			}
 		}
 		list_for_each_entry(mb_entry, &ctx->ref_queue, list) {
-			mb_y_addr = vb2_dma_contig_plane_dma_addr(
+			mb_y_addr = s5p_mfc_src_plane_addr(
 					&mb_entry->b->vb2_buf, 0);
-			mb_c_addr = vb2_dma_contig_plane_dma_addr(
+			mb_c_addr = s5p_mfc_src_plane_addr(
 					&mb_entry->b->vb2_buf, 1);
 			if (ctx->src_fmt->fourcc ==
 					V4L2_PIX_FMT_YUV420M ||
 					ctx->src_fmt->fourcc == V4L2_PIX_FMT_YVU420M)
-				mb_c_1_addr = vb2_dma_contig_plane_dma_addr(&
+				mb_c_1_addr = s5p_mfc_src_plane_addr(&
 						mb_entry->b->vb2_buf, 2);
 			else
 				mb_c_1_addr = 0;
 			if (enc_y_addr == mb_y_addr && enc_c_addr == mb_c_addr && enc_c_1_addr
 					== mb_c_1_addr) {
+				ctx->enc_last_ts = mb_entry->b->vb2_buf.timestamp;
 				list_del(&mb_entry->list);
 				ctx->ref_queue_cnt--;
 				vb2_buffer_done(&mb_entry->b->vb2_buf,
@@ -1319,6 +1322,8 @@ static int enc_post_frame_start(struct s5p_mfc_ctx *ctx)
 			mb_entry->b->flags |= V4L2_BUF_FLAG_BFRAME;
 			break;
 		}
+		/* The client matches the bitstream to its frame by timestamp. */
+		mb_entry->b->vb2_buf.timestamp = ctx->enc_last_ts;
 		vb2_set_plane_payload(&mb_entry->b->vb2_buf, 0, strm_size);
 		vb2_buffer_done(&mb_entry->b->vb2_buf, VB2_BUF_STATE_DONE);
 	}
@@ -1460,6 +1465,10 @@ static int vidioc_try_fmt(struct file *file, void *priv, struct v4l2_format *f)
 		if (IS_MFCV12(dev))
 			v4l_bound_align_image(&pix_fmt_mp->width, 8, 3840, 1, &pix_fmt_mp
 					->height, 4, 2160, 1, 0);
+		else if (pix_fmt_mp->height > pix_fmt_mp->width)
+			/* Portrait: the same number of macroblocks as 1080p. */
+			v4l_bound_align_image(&pix_fmt_mp->width, 8, 1080, 1, &pix_fmt_mp
+					->height, 4, 1920, 1, 0);
 		else
 			v4l_bound_align_image(&pix_fmt_mp->width, 8, 1920, 1, &pix_fmt_mp
 					->height, 4, 1080, 1, 0);
@@ -1475,6 +1484,7 @@ static int vidioc_s_fmt(struct file *file, void *priv, struct v4l2_format *f)
 	struct s5p_mfc_ctx *ctx = file_to_ctx(file);
 	struct s5p_mfc_dev *dev = video_drvdata(file);
 	struct v4l2_pix_format_mplane *pix_fmt_mp = &f->fmt.pix_mp;
+	u32 bpl = pix_fmt_mp->plane_fmt[0].bytesperline;
 	int ret = 0;
 
 	ret = vidioc_try_fmt(file, priv, f);
@@ -1506,6 +1516,21 @@ static int vidioc_s_fmt(struct file *file, void *priv, struct v4l2_format *f)
 			ctx->img_width, ctx->img_height);
 
 		s5p_mfc_hw_call(dev->mfc_ops, enc_calc_src_size, ctx);
+		/*
+		 * A wider pitch than the MFC needs, as gralloc allocates: the
+		 * stride registers take it, and the planes grow with it.
+		 */
+		if (IS_MFCV7_PLUS(dev) && !IS_MFCV12(dev) &&
+		    (ctx->src_fmt->fourcc == V4L2_PIX_FMT_NV12M ||
+		     ctx->src_fmt->fourcc == V4L2_PIX_FMT_NV21M) &&
+		    bpl > ctx->stride[0] && bpl <= 4096) {
+			ctx->stride[0] = ALIGN(bpl, 16);
+			ctx->stride[1] = ctx->stride[0];
+			ctx->luma_size = ctx->stride[0] *
+				ALIGN(ctx->img_height, 16) + MFC_LUMA_PAD_BYTES_V7;
+			ctx->chroma_size = ctx->stride[1] *
+				ALIGN(ctx->img_height, 16) / 2 + MFC_LUMA_PAD_BYTES_V7;
+		}
 		pix_fmt_mp->plane_fmt[0].sizeimage = ctx->luma_size;
 		pix_fmt_mp->plane_fmt[0].bytesperline = ctx->stride[0];
 		pix_fmt_mp->plane_fmt[1].sizeimage = ctx->chroma_size;
@@ -1619,7 +1644,8 @@ static int vidioc_querybuf(struct file *file, void *priv,
 			mfc_err("error in vb2_querybuf() for E(D)\n");
 			return ret;
 		}
-		buf->m.planes[0].m.mem_offset += DST_QUEUE_OFF_BASE;
+		if (buf->memory == V4L2_MEMORY_MMAP)
+			buf->m.planes[0].m.mem_offset += DST_QUEUE_OFF_BASE;
 	} else if (buf->type == V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE) {
 		ret = vb2_querybuf(&ctx->vq_src, buf);
 		if (ret != 0) {
@@ -1722,7 +1748,7 @@ static int vidioc_streamoff(struct file *file, void *priv,
 
 static inline int h264_level(enum v4l2_mpeg_video_h264_level lvl)
 {
-	static unsigned int t[V4L2_MPEG_VIDEO_H264_LEVEL_4_0 + 1] = {
+	static unsigned int t[V4L2_MPEG_VIDEO_H264_LEVEL_5_1 + 1] = {
 		/* V4L2_MPEG_VIDEO_H264_LEVEL_1_0   */ 10,
 		/* V4L2_MPEG_VIDEO_H264_LEVEL_1B    */ 9,
 		/* V4L2_MPEG_VIDEO_H264_LEVEL_1_1   */ 11,
@@ -1735,6 +1761,10 @@ static inline int h264_level(enum v4l2_mpeg_video_h264_level lvl)
 		/* V4L2_MPEG_VIDEO_H264_LEVEL_3_1   */ 31,
 		/* V4L2_MPEG_VIDEO_H264_LEVEL_3_2   */ 32,
 		/* V4L2_MPEG_VIDEO_H264_LEVEL_4_0   */ 40,
+		/* V4L2_MPEG_VIDEO_H264_LEVEL_4_1   */ 41,
+		/* V4L2_MPEG_VIDEO_H264_LEVEL_4_2   */ 42,
+		/* V4L2_MPEG_VIDEO_H264_LEVEL_5_0   */ 50,
+		/* V4L2_MPEG_VIDEO_H264_LEVEL_5_1   */ 51,
 	};
 	return t[lvl];
 }
@@ -2318,7 +2348,7 @@ static int vidioc_g_parm(struct file *file, void *priv,
 static int vidioc_try_encoder_cmd(struct file *file, void *priv,
 				  struct v4l2_encoder_cmd *cmd)
 {
-	if (cmd->cmd != V4L2_ENC_CMD_STOP)
+	if (cmd->cmd != V4L2_ENC_CMD_STOP && cmd->cmd != V4L2_ENC_CMD_START)
 		return -EINVAL;
 
 	return cmd->flags ? -EINVAL : 0;
@@ -2359,10 +2389,89 @@ static int vidioc_encoder_cmd(struct file *file, void *priv,
 			spin_unlock_irqrestore(&dev->irqlock, flags);
 		}
 		break;
+	case V4L2_ENC_CMD_START:
+		/* Resume after a drain: the stateful encoder API. */
+		if (cmd->flags != 0)
+			return -EINVAL;
+
+		spin_lock_irqsave(&dev->irqlock, flags);
+		if (ctx->state == MFCINST_FINISHED ||
+		    ctx->state == MFCINST_FINISHING)
+			ctx->state = MFCINST_RUNNING;
+		ctx->enc_last_pending = false;
+		spin_unlock_irqrestore(&dev->irqlock, flags);
+		vb2_clear_last_buffer_dequeued(&ctx->vq_dst);
+		if (s5p_mfc_ctx_ready(ctx))
+			set_work_bit_irqsave(ctx);
+		s5p_mfc_hw_call(dev->mfc_ops, try_run, dev);
+		break;
 	default:
 		return -EINVAL;
 
 	}
+	return 0;
+}
+
+/*
+ * The MFC encodes the whole OUTPUT picture: the crop rectangle is the
+ * frame, and setting it is accepted as long as the client takes it back.
+ */
+static int vidioc_g_selection(struct file *file, void *priv,
+			      struct v4l2_selection *s)
+{
+	struct s5p_mfc_ctx *ctx = file_to_ctx(file);
+
+	if (s->type != V4L2_BUF_TYPE_VIDEO_OUTPUT)
+		return -EINVAL;
+
+	switch (s->target) {
+	case V4L2_SEL_TGT_CROP:
+	case V4L2_SEL_TGT_CROP_DEFAULT:
+	case V4L2_SEL_TGT_CROP_BOUNDS:
+		s->r.left = 0;
+		s->r.top = 0;
+		s->r.width = ctx->img_width;
+		s->r.height = ctx->img_height;
+		return 0;
+	default:
+		return -EINVAL;
+	}
+}
+
+static int vidioc_s_selection(struct file *file, void *priv,
+			      struct v4l2_selection *s)
+{
+	if (s->target != V4L2_SEL_TGT_CROP)
+		return -EINVAL;
+
+	return vidioc_g_selection(file, priv, s);
+}
+
+static int vidioc_enum_framesizes(struct file *file, void *priv,
+				  struct v4l2_frmsizeenum *fsize)
+{
+	struct s5p_mfc_dev *dev = video_drvdata(file);
+	const struct s5p_mfc_fmt *fmt = NULL;
+	unsigned int i;
+
+	if (fsize->index)
+		return -EINVAL;
+
+	for (i = 0; i < ARRAY_SIZE(formats); i++)
+		if (formats[i].fourcc == fsize->pixel_format &&
+		    (dev->variant->version_bit & formats[i].versions))
+			fmt = &formats[i];
+	if (!fmt)
+		return -EINVAL;
+
+	fsize->type = V4L2_FRMSIZE_TYPE_STEPWISE;
+	fsize->stepwise.min_width = 32;
+	fsize->stepwise.min_height = 32;
+	/* Either orientation: S_FMT bounds the macroblock count. */
+	fsize->stepwise.max_width = IS_MFCV12(dev) ? 3840 : 1920;
+	fsize->stepwise.max_height = IS_MFCV12(dev) ? 2160 : 1920;
+	fsize->stepwise.step_width = 2;
+	fsize->stepwise.step_height = 2;
 	return 0;
 }
 
@@ -2398,6 +2507,9 @@ static const struct v4l2_ioctl_ops s5p_mfc_enc_ioctl_ops = {
 	.vidioc_g_parm = vidioc_g_parm,
 	.vidioc_encoder_cmd = vidioc_encoder_cmd,
 	.vidioc_try_encoder_cmd = vidioc_try_encoder_cmd,
+	.vidioc_g_selection = vidioc_g_selection,
+	.vidioc_s_selection = vidioc_s_selection,
+	.vidioc_enum_framesizes = vidioc_enum_framesizes,
 	.vidioc_subscribe_event = vidioc_subscribe_event,
 	.vidioc_unsubscribe_event = v4l2_event_unsubscribe,
 };
@@ -2527,6 +2639,7 @@ static int s5p_mfc_buf_prepare(struct vb2_buffer *vb)
 {
 	struct vb2_queue *vq = vb->vb2_queue;
 	struct s5p_mfc_ctx *ctx = vb2_get_drv_priv(vq);
+	unsigned int i;
 	int ret;
 
 	if (vq->type == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE) {
@@ -2551,6 +2664,25 @@ static int s5p_mfc_buf_prepare(struct vb2_buffer *vb)
 		    vb2_plane_size(vb, 1) < ctx->chroma_size) {
 			mfc_err("plane size is too small for output\n");
 			return -EINVAL;
+		}
+		/*
+		 * Planes sharing one dmabuf are only checked against its size
+		 * for the first one: the MFC reads whole macroblocks plus the
+		 * padding, and a read past the mapping is a SysMMU fault.
+		 */
+		if (vq->memory == VB2_MEMORY_DMABUF) {
+			size_t need[2] = { ctx->luma_size, ctx->chroma_size };
+
+			for (i = 0; i < 2; i++) {
+				if (vb->planes[i].data_offset + need[i] >
+				    vb->planes[i].dbuf->size) {
+					mfc_err("plane %u: need %zu at %u, dmabuf %zu\n",
+						i, need[i],
+						vb->planes[i].data_offset,
+						vb->planes[i].dbuf->size);
+					return -EINVAL;
+				}
+			}
 		}
 		if ((ctx->src_fmt->fourcc == V4L2_PIX_FMT_YUV420M ||
 		     ctx->src_fmt->fourcc == V4L2_PIX_FMT_YVU420M) &&
@@ -2614,6 +2746,7 @@ static void s5p_mfc_stop_streaming(struct vb2_queue *q)
 		s5p_mfc_cleanup_queue(&ctx->dst_queue, &ctx->vq_dst);
 		INIT_LIST_HEAD(&ctx->dst_queue);
 		ctx->dst_queue_cnt = 0;
+		ctx->enc_last_pending = false;
 	}
 	if (q->type == V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE) {
 		cleanup_ref_queue(ctx);
@@ -2640,6 +2773,14 @@ static void s5p_mfc_buf_queue(struct vb2_buffer *vb)
 	if (vq->type == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE) {
 		mfc_buf = &ctx->dst_bufs[vb->index];
 		mfc_buf->flags &= ~MFC_BUF_FLAG_USED;
+		if (ctx->state == MFCINST_FINISHED && ctx->enc_last_pending) {
+			/* The stream completed with no buffer to mark LAST. */
+			ctx->enc_last_pending = false;
+			mfc_buf->b->flags |= V4L2_BUF_FLAG_LAST;
+			vb2_set_plane_payload(vb, 0, 0);
+			vb2_buffer_done(vb, VB2_BUF_STATE_DONE);
+			return;
+		}
 		/* Mark destination as available for use by MFC */
 		spin_lock_irqsave(&dev->irqlock, flags);
 		list_add_tail(&mfc_buf->list, &ctx->dst_queue);
@@ -2726,7 +2867,8 @@ int s5p_mfc_enc_ctrls_setup(struct s5p_mfc_ctx *ctx)
 				ctx->ctrls[i] = v4l2_ctrl_new_std_menu(
 					&ctx->ctrl_handler,
 					&s5p_mfc_enc_ctrl_ops, controls[i].id,
-					controls[i].maximum, 0,
+					controls[i].maximum,
+					controls[i].menu_skip_mask,
 					controls[i].default_value);
 			} else {
 				ctx->ctrls[i] = v4l2_ctrl_new_std(

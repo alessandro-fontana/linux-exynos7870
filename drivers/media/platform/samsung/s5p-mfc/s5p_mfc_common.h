@@ -342,6 +342,8 @@ struct s5p_mfc_dev {
 	struct timer_list watchdog_timer;
 	struct workqueue_struct *watchdog_workqueue;
 	struct work_struct watchdog_work;
+	/* try_run from process context, for steps that allocate memory. */
+	struct work_struct run_work;
 	unsigned long enter_suspend;
 
 	struct s5p_mfc_priv_buf ctx_buf;
@@ -728,6 +730,13 @@ struct s5p_mfc_ctx {
 	size_t tmv_buffer_size;
 
 	enum v4l2_mpeg_mfc51_video_force_frame_type force_frame_type;
+	/*
+	 * Stateful encoder API: the LAST buffer owed to a client that had
+	 * no CAPTURE buffer queued when the stream completed, and the
+	 * timestamp of the last source frame, for the bitstream buffers.
+	 */
+	bool enc_last_pending;
+	u64 enc_last_ts;
 
 	struct list_head ref_queue;
 	unsigned int ref_queue_cnt;
@@ -823,5 +832,16 @@ void s5p_mfc_cleanup_queue(struct list_head *lh, struct vb2_queue *vq);
 					MFC_V12_BIT)
 
 #define MFC_V10PLUS_BITS	(MFC_V10_BIT | MFC_V12_BIT)
+
+/*
+ * Encoder source planes: Android hands in one dmabuf for both NV12M planes,
+ * with the chroma at data_offset of the second one.
+ */
+static inline dma_addr_t s5p_mfc_src_plane_addr(struct vb2_buffer *vb,
+						unsigned int plane)
+{
+	return vb2_dma_contig_plane_dma_addr(vb, plane) +
+	       vb->planes[plane].data_offset;
+}
 
 #endif /* S5P_MFC_COMMON_H_ */
