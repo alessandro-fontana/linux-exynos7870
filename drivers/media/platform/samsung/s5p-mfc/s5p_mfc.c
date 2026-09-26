@@ -163,6 +163,14 @@ static void s5p_mfc_watchdog(struct timer_list *t)
 	add_timer(&dev->watchdog_timer);
 }
 
+static void s5p_mfc_run_worker(struct work_struct *work)
+{
+	struct s5p_mfc_dev *dev = container_of(work, struct s5p_mfc_dev,
+					       run_work);
+
+	s5p_mfc_hw_call(dev->mfc_ops, try_run, dev);
+}
+
 static void s5p_mfc_watchdog_worker(struct work_struct *work)
 {
 	struct s5p_mfc_dev *dev;
@@ -585,6 +593,11 @@ static void s5p_mfc_handle_seq_done(struct s5p_mfc_ctx *ctx,
 	}
 	s5p_mfc_hw_call(dev->mfc_ops, clear_int_flags, dev);
 	clear_work_bit(ctx);
+	/* The encoder goes on with the frames already queued. */
+	if (ctx->type == MFCINST_ENCODER &&
+	    ctx->state == MFCINST_HEAD_PRODUCED &&
+	    ctx->src_queue_cnt >= 1 && ctx->dst_queue_cnt >= 1)
+		set_work_bit(ctx);
 	WARN_ON(test_and_clear_bit(0, &dev->hw_lock) == 0);
 	s5p_mfc_clock_off(dev);
 	s5p_mfc_hw_call(dev->mfc_ops, try_run, dev);
@@ -652,7 +665,12 @@ static void s5p_mfc_handle_stream_complete(struct s5p_mfc_ctx *ctx)
 		list_del(&mb_entry->list);
 		ctx->dst_queue_cnt--;
 		vb2_set_plane_payload(&mb_entry->b->vb2_buf, 0, 0);
+		if (ctx->type == MFCINST_ENCODER)
+			mb_entry->b->flags |= V4L2_BUF_FLAG_LAST;
 		vb2_buffer_done(&mb_entry->b->vb2_buf, VB2_BUF_STATE_DONE);
+	} else if (ctx->type == MFCINST_ENCODER) {
+		/* Given with the next CAPTURE buffer queued. */
+		ctx->enc_last_pending = true;
 	}
 
 	clear_work_bit(ctx);
@@ -912,6 +930,8 @@ static int s5p_mfc_open(struct file *file)
 	} else if (vdev == dev->vfd_enc) {
 		q->io_modes = VB2_MMAP | VB2_USERPTR | VB2_DMABUF;
 		q->ops = get_enc_queue_ops();
+		/* A fault on a stream buffer is a panic: map it readable too. */
+		q->bidirectional = 1;
 	} else {
 		ret = -ENOENT;
 		goto err_queue_init;
@@ -1417,6 +1437,7 @@ static int s5p_mfc_probe(struct platform_device *pdev)
 	init_waitqueue_head(&dev->queue);
 	dev->hw_lock = 0;
 	INIT_WORK(&dev->watchdog_work, s5p_mfc_watchdog_worker);
+	INIT_WORK(&dev->run_work, s5p_mfc_run_worker);
 	atomic_set(&dev->watchdog_cnt, 0);
 	timer_setup(&dev->watchdog_timer, s5p_mfc_watchdog, 0);
 
@@ -1533,6 +1554,7 @@ static void s5p_mfc_remove(struct platform_device *pdev)
 
 	timer_delete_sync(&dev->watchdog_timer);
 	flush_work(&dev->watchdog_work);
+	cancel_work_sync(&dev->run_work);
 
 	video_unregister_device(dev->vfd_enc);
 	video_unregister_device(dev->vfd_dec);

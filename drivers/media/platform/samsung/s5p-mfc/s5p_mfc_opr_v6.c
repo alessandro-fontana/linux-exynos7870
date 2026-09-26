@@ -1176,6 +1176,8 @@ static int s5p_mfc_set_enc_params_h264(struct s5p_mfc_ctx *ctx)
 	/* interlace */
 	reg = 0;
 	reg |= ((p_h264->interlace & 0x1) << 3);
+	/* The control is stored with the HEVC parameters, it applies to both. */
+	reg |= ((p->codec.hevc.prepend_sps_pps_to_idr & 0x1) << 29);
 	writel(reg, mfc_regs->e_h264_options);
 
 	/* height */
@@ -2059,11 +2061,11 @@ static inline int s5p_mfc_run_enc_frame(struct s5p_mfc_ctx *ctx)
 			s5p_mfc_set_enc_frame_buffer_v6(ctx, 0, 0, 0);
 			ctx->state = MFCINST_FINISHING;
 		} else {
-			src_y_addr = vb2_dma_contig_plane_dma_addr(&src_mb->b->vb2_buf, 0);
-			src_c_addr = vb2_dma_contig_plane_dma_addr(&src_mb->b->vb2_buf, 1);
+			src_y_addr = s5p_mfc_src_plane_addr(&src_mb->b->vb2_buf, 0);
+			src_c_addr = s5p_mfc_src_plane_addr(&src_mb->b->vb2_buf, 1);
 			if (ctx->src_fmt->fourcc == V4L2_PIX_FMT_YUV420M || ctx->src_fmt->fourcc ==
 					V4L2_PIX_FMT_YVU420M)
-				src_c_1_addr = vb2_dma_contig_plane_dma_addr
+				src_c_1_addr = s5p_mfc_src_plane_addr
 					(&src_mb->b->vb2_buf, 2);
 			else
 				src_c_1_addr = 0;
@@ -2083,6 +2085,10 @@ static inline int s5p_mfc_run_enc_frame(struct s5p_mfc_ctx *ctx)
 	dst_size = vb2_plane_size(&dst_mb->b->vb2_buf, 0);
 
 	s5p_mfc_set_enc_stream_buffer_v6(ctx, dst_addr, dst_size);
+
+	/* FORCE_KEY_FRAME and FORCE_FRAME_TYPE apply to this picture only. */
+	writel(ctx->force_frame_type & 0x3, dev->mfc_regs->e_frame_insertion);
+	ctx->force_frame_type = V4L2_MPEG_MFC51_VIDEO_FORCE_FRAME_TYPE_DISABLED;
 
 	dev->curr_ctx = ctx->num;
 	s5p_mfc_encode_one_frame_v6(ctx);
@@ -2149,6 +2155,16 @@ static inline int s5p_mfc_run_init_enc_buffers(struct s5p_mfc_ctx *ctx)
 {
 	struct s5p_mfc_dev *dev = ctx->dev;
 	int ret;
+
+	/*
+	 * The codec buffers are allocated here, and with an IOMMU that means
+	 * a vmalloc remap, which is a BUG in interrupt context: when try_run
+	 * comes from the interrupt handler, retry from a worker.
+	 */
+	if (in_interrupt()) {
+		schedule_work(&dev->run_work);
+		return -EAGAIN;
+	}
 
 	ret = s5p_mfc_hw_call(ctx->dev->mfc_ops, alloc_codec_buffers, ctx);
 	if (ret) {
