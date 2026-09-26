@@ -83,5 +83,8 @@
 	(((x + 3) * (y + 3) * 32)	\
 	 + ((y * 128) + 1280) * DIV_ROUND_UP(x, 4))
 
+/* E_VP8_OPTION: no IVF file and frame headers around the stream */
+#define S5P_FIMV_E_VP8_OPTION_DISABLE_IVF_HEADER_V10	BIT(12)
+
 #endif /*_REGS_MFC_V10_H*/
 

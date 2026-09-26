@@ -1635,6 +1635,13 @@ static int s5p_mfc_set_enc_params_vp8(struct s5p_mfc_ctx *ctx)
 	}
 	reg |= (val & 0xF) << 3;
 	reg |= (p_vp8->num_ref & 0x2);
+	/*
+	 * MFC v10 wraps the stream in IVF unless told not to: a file header
+	 * as the first buffer and a 12 byte header in front of each frame.
+	 * V4L2_PIX_FMT_VP8 is the bare frames.
+	 */
+	if (IS_MFCV10_PLUS(dev))
+		reg |= S5P_FIMV_E_VP8_OPTION_DISABLE_IVF_HEADER_V10;
 	writel(reg, mfc_regs->e_vp8_options);
 
 	mfc_debug_leave();
