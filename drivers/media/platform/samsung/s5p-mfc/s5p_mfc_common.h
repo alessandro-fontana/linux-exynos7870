@@ -737,6 +737,8 @@ struct s5p_mfc_ctx {
 	 */
 	bool enc_last_pending;
 	u64 enc_last_ts;
+	/* Rate control changes for the next picture: E_PARAM_CHANGE bits. */
+	unsigned long enc_param_change;
 
 	struct list_head ref_queue;
 	unsigned int ref_queue_cnt;
@@ -832,6 +834,10 @@ void s5p_mfc_cleanup_queue(struct list_head *lh, struct vb2_queue *vq);
 					MFC_V12_BIT)
 
 #define MFC_V10PLUS_BITS	(MFC_V10_BIT | MFC_V12_BIT)
+
+/* E_PARAM_CHANGE: the rate control values rewritten for the next picture. */
+#define S5P_MFC_ENC_CHANGE_FRAMERATE	1
+#define S5P_MFC_ENC_CHANGE_BITRATE	2
 
 /*
  * Encoder source planes: Android hands in one dmabuf for both NV12M planes,
