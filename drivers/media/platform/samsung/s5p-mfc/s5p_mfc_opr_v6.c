@@ -2031,6 +2031,7 @@ static inline int s5p_mfc_run_dec_frame(struct s5p_mfc_ctx *ctx)
 
 static inline int s5p_mfc_run_enc_frame(struct s5p_mfc_ctx *ctx)
 {
+	unsigned long change;
 	struct s5p_mfc_dev *dev = ctx->dev;
 	struct s5p_mfc_buf *dst_mb;
 	struct s5p_mfc_buf *src_mb;
@@ -2085,6 +2086,16 @@ static inline int s5p_mfc_run_enc_frame(struct s5p_mfc_ctx *ctx)
 	dst_size = vb2_plane_size(&dst_mb->b->vb2_buf, 0);
 
 	s5p_mfc_set_enc_stream_buffer_v6(ctx, dst_addr, dst_size);
+
+	/* Bit rate and frame rate changed while encoding (downstream: SFR mode). */
+	change = xchg(&ctx->enc_param_change, 0);
+	if (change & BIT(S5P_MFC_ENC_CHANGE_FRAMERATE))
+		writel(((ctx->enc_params.rc_framerate_num & 0xFFFF) << 16) |
+		       (ctx->enc_params.rc_framerate_denom & 0xFFFF),
+		       dev->mfc_regs->e_rc_frame_rate);
+	if (change & BIT(S5P_MFC_ENC_CHANGE_BITRATE))
+		writel(ctx->enc_params.rc_bitrate, dev->mfc_regs->e_rc_bit_rate);
+	writel(change, dev->mfc_regs->e_param_change);
 
 	/* FORCE_KEY_FRAME and FORCE_FRAME_TYPE apply to this picture only. */
 	writel(ctx->force_frame_type & 0x3, dev->mfc_regs->e_frame_insertion);

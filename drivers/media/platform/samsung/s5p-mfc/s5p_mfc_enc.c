@@ -1901,6 +1901,9 @@ static int s5p_mfc_enc_s_ctrl(struct v4l2_ctrl *ctrl)
 		break;
 	case V4L2_CID_MPEG_VIDEO_BITRATE:
 		p->rc_bitrate = ctrl->val;
+		/* While encoding, applied from the next picture. */
+		if (ctx->state == MFCINST_RUNNING)
+			set_bit(S5P_MFC_ENC_CHANGE_BITRATE, &ctx->enc_param_change);
 		break;
 	case V4L2_CID_MPEG_MFC51_VIDEO_RC_REACTION_COEFF:
 		p->rc_reaction_coeff = ctrl->val;
@@ -2321,6 +2324,9 @@ static int vidioc_s_parm(struct file *file, void *priv,
 					a->parm.output.timeperframe.denominator;
 		ctx->enc_params.rc_framerate_denom =
 					a->parm.output.timeperframe.numerator;
+		if (ctx->state == MFCINST_RUNNING)
+			set_bit(S5P_MFC_ENC_CHANGE_FRAMERATE,
+				&ctx->enc_param_change);
 	} else {
 		mfc_err("Setting FPS is only possible for the output queue\n");
 		return -EINVAL;
@@ -2732,6 +2738,12 @@ static void s5p_mfc_stop_streaming(struct vb2_queue *q)
 	unsigned long flags;
 	struct s5p_mfc_ctx *ctx = vb2_get_drv_priv(q);
 	struct s5p_mfc_dev *dev = ctx->dev;
+	/*
+	 * A flush (MediaCodec.flush()): both queues stop and start again in
+	 * the middle of the stream. The instance stays usable; only a stop
+	 * after the drain leaves it finished.
+	 */
+	enum s5p_mfc_inst_state prev = ctx->state;
 
 	if ((ctx->state == MFCINST_FINISHING ||
 		ctx->state == MFCINST_RUNNING) &&
@@ -2740,7 +2752,15 @@ static void s5p_mfc_stop_streaming(struct vb2_queue *q)
 		s5p_mfc_wait_for_done_ctx(ctx, S5P_MFC_R2H_CMD_FRAME_DONE_RET,
 					  0);
 	}
-	ctx->state = MFCINST_FINISHED;
+	if (prev == MFCINST_RUNNING || prev == MFCINST_HEAD_PRODUCED) {
+		ctx->state = prev;
+		/* The references are gone with the buffers: restart on an IDR. */
+		if (prev == MFCINST_RUNNING)
+			ctx->force_frame_type =
+				V4L2_MPEG_MFC51_VIDEO_FORCE_FRAME_TYPE_I_FRAME;
+	} else {
+		ctx->state = MFCINST_FINISHED;
+	}
 	spin_lock_irqsave(&dev->irqlock, flags);
 	if (q->type == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE) {
 		s5p_mfc_cleanup_queue(&ctx->dst_queue, &ctx->vq_dst);
