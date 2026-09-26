@@ -7,6 +7,9 @@
  */
 
 #include <linux/clk-provider.h>
+#include <linux/of_address.h>
+#include <linux/iopoll.h>
+#include <linux/clk.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
 
@@ -2198,6 +2201,98 @@ static const struct samsung_cmu_info peri_cmu_info __initconst = {
 	.nr_clk_ids		= PERI_NR_CLK,
 };
 
+/*
+ * G3D frequency changes. If the G3D PLL relocks with the GPU running on
+ * it, the GPU's bridge to the memory interconnect loses its clock in the
+ * middle of transactions and stalls the bus for all masters, long enough
+ * for the camera receiver's DMA FIFO to fill and the display controller to
+ * underrun. As the vendor kernel does, and as clk-cpu does for the CPUs,
+ * move the GPU to the switch clock from CMU_MIF around every PLL rate
+ * change.
+ */
+struct exynos7870_g3d_switch {
+	void __iomem *base;
+	struct notifier_block nb;
+};
+
+#define G3D_MUX_SELECT	BIT(12)
+#define G3D_MUX_BUSY	BIT(16)
+
+static int exynos7870_g3d_pll_notify(struct notifier_block *nb,
+				     unsigned long event, void *data)
+{
+	struct exynos7870_g3d_switch *sw =
+		container_of(nb, struct exynos7870_g3d_switch, nb);
+	u32 reg = readl(sw->base + CLK_CON_MUX_G3D);
+
+	switch (event) {
+	case PRE_RATE_CHANGE:
+		reg |= G3D_MUX_SELECT;
+		break;
+	case POST_RATE_CHANGE:
+	case ABORT_RATE_CHANGE:
+		reg &= ~G3D_MUX_SELECT;
+		break;
+	default:
+		return NOTIFY_DONE;
+	}
+
+	writel(reg, sw->base + CLK_CON_MUX_G3D);
+	if (readl_poll_timeout_atomic(sw->base + CLK_CON_MUX_G3D, reg,
+				      !(reg & G3D_MUX_BUSY), 1, 100))
+		pr_warn_ratelimited("exynos7870: G3D mux still busy\n");
+
+	return NOTIFY_OK;
+}
+
+static void __init exynos7870_g3d_switch_init(struct device *dev)
+{
+	struct of_phandle_args spec = {
+		.np = dev->of_node,
+		.args_count = 1,
+	};
+	struct exynos7870_g3d_switch *sw;
+	struct clk *input, *user, *pll;
+	int ret;
+
+	/* The switch clock from CMU_MIF, kept on for the rate changes. */
+	input = devm_clk_get_enabled(dev, "switch");
+	if (IS_ERR(input)) {
+		dev_warn(dev, "no switch clock: %ld\n", PTR_ERR(input));
+		return;
+	}
+
+	spec.args[0] = CLK_MOUT_G3D_SWITCH_USER;
+	user = of_clk_get_from_provider(&spec);
+	spec.args[0] = CLK_FOUT_G3D_PLL;
+	pll = of_clk_get_from_provider(&spec);
+	if (IS_ERR(user) || IS_ERR(pll)) {
+		dev_warn(dev, "no G3D mux or PLL clock\n");
+		return;
+	}
+
+	ret = clk_set_parent(user, input);
+	if (ret) {
+		dev_warn(dev, "cannot select the switch clock: %d\n", ret);
+		return;
+	}
+
+	sw = devm_kzalloc(dev, sizeof(*sw), GFP_KERNEL);
+	if (!sw)
+		return;
+	sw->base = of_iomap(dev->of_node, 0);
+	if (!sw->base)
+		return;
+	sw->nb.notifier_call = exynos7870_g3d_pll_notify;
+
+	ret = clk_notifier_register(pll, &sw->nb);
+	if (ret)
+		dev_warn(dev, "cannot watch the G3D PLL: %d\n", ret);
+	else
+		dev_dbg(dev, "G3D on the switch clock (%lu Hz) during PLL changes\n",
+			clk_get_rate(input));
+}
+
 static int __init exynos7870_cmu_probe(struct platform_device *pdev)
 {
 	const struct samsung_cmu_info *info;
@@ -2205,6 +2300,9 @@ static int __init exynos7870_cmu_probe(struct platform_device *pdev)
 
 	info = of_device_get_match_data(dev);
 	exynos_arm64_register_cmu(dev, dev->of_node, info);
+
+	if (info == &g3d_cmu_info)
+		exynos7870_g3d_switch_init(dev);
 
 	return 0;
 }
