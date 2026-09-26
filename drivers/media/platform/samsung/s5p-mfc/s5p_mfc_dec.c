@@ -853,6 +853,18 @@ static int vidioc_g_selection(struct file *file, void *priv,
 	return 0;
 }
 
+static int vidioc_try_decoder_cmd(struct file *file, void *priv,
+				  struct v4l2_decoder_cmd *cmd)
+{
+	switch (cmd->cmd) {
+	case V4L2_DEC_CMD_STOP:
+	case V4L2_DEC_CMD_START:
+		return cmd->flags ? -EINVAL : 0;
+	default:
+		return -EINVAL;
+	}
+}
+
 static int vidioc_decoder_cmd(struct file *file, void *priv,
 			      struct v4l2_decoder_cmd *cmd)
 {
@@ -887,6 +899,20 @@ static int vidioc_decoder_cmd(struct file *file, void *priv,
 				buf->flags |= MFC_BUF_FLAG_EOS;
 			spin_unlock_irqrestore(&dev->irqlock, flags);
 		}
+		break;
+	case V4L2_DEC_CMD_START:
+		/*
+		 * Resume after a drain (V4L2 stateful decoder API): the
+		 * instance was left finished once the last frame came out.
+		 */
+		if (cmd->flags != 0)
+			return -EINVAL;
+
+		spin_lock_irqsave(&dev->irqlock, flags);
+		if (ctx->state == MFCINST_FINISHED ||
+		    ctx->state == MFCINST_FINISHING)
+			ctx->state = MFCINST_RUNNING;
+		spin_unlock_irqrestore(&dev->irqlock, flags);
 		break;
 	default:
 		return -EINVAL;
@@ -928,6 +954,7 @@ static const struct v4l2_ioctl_ops s5p_mfc_dec_ioctl_ops = {
 	.vidioc_streamoff = vidioc_streamoff,
 	.vidioc_g_selection = vidioc_g_selection,
 	.vidioc_decoder_cmd = vidioc_decoder_cmd,
+	.vidioc_try_decoder_cmd = vidioc_try_decoder_cmd,
 	.vidioc_subscribe_event = vidioc_subscribe_event,
 	.vidioc_unsubscribe_event = v4l2_event_unsubscribe,
 };
