@@ -44,7 +44,7 @@
 /* MFC definitions */
 #define MFC_MAX_EXTRA_DPB       5
 #define MFC_MAX_BUFFERS		32
-#define MFC_NUM_CONTEXTS	4
+#define MFC_NUM_CONTEXTS	8
 /* Interrupt timeout */
 #define MFC_INT_TIMEOUT		2000
 /* Busy wait timeout */
