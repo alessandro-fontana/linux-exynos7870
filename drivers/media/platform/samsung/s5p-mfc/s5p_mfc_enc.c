@@ -1433,6 +1433,9 @@ static int vidioc_g_fmt(struct file *file, void *priv, struct v4l2_format *f)
 	return 0;
 }
 
+/* 1920x1088 in macroblocks, the most the encoder takes before MFC v12. */
+#define S5P_MFC_ENC_MAX_MBS	8160
+
 static int vidioc_try_fmt(struct file *file, void *priv, struct v4l2_format *f)
 {
 	struct s5p_mfc_dev *dev = video_drvdata(file);
@@ -1462,16 +1465,24 @@ static int vidioc_try_fmt(struct file *file, void *priv, struct v4l2_format *f)
 			mfc_err("Unsupported format by this MFC version.\n");
 			return -EINVAL;
 		}
-		if (IS_MFCV12(dev))
+		if (IS_MFCV12(dev)) {
 			v4l_bound_align_image(&pix_fmt_mp->width, 8, 3840, 1, &pix_fmt_mp
 					->height, 4, 2160, 1, 0);
-		else if (pix_fmt_mp->height > pix_fmt_mp->width)
-			/* Portrait: the same number of macroblocks as 1080p. */
-			v4l_bound_align_image(&pix_fmt_mp->width, 8, 1080, 1, &pix_fmt_mp
-					->height, 4, 1920, 1, 0);
-		else
+		} else {
+			unsigned int mb_w, max_mb_h;
+
+			/*
+			 * The limit is a macroblock count, 1920x1088 = 8160, in
+			 * either orientation: 1080 would reject the 1088 lines
+			 * that a 1080p frame is coded with anyway.
+			 */
 			v4l_bound_align_image(&pix_fmt_mp->width, 8, 1920, 1, &pix_fmt_mp
-					->height, 4, 1080, 1, 0);
+					->height, 4, 1920, 1, 0);
+			mb_w = DIV_ROUND_UP(pix_fmt_mp->width, 16);
+			max_mb_h = S5P_MFC_ENC_MAX_MBS / mb_w;
+			if (DIV_ROUND_UP(pix_fmt_mp->height, 16) > max_mb_h)
+				pix_fmt_mp->height = max_mb_h * 16;
+		}
 	} else {
 		mfc_err("invalid buf type\n");
 		return -EINVAL;
