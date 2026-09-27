@@ -273,6 +273,19 @@ static struct mfc_control controls[] = {
 
 #define NUM_CTRLS ARRAY_SIZE(controls)
 
+/* Largest stream header kept for a second SEQ_START (see reqbufs_capture()). */
+#define MFC_DEC_HDR_MAX		SZ_64K
+
+void s5p_mfc_dec_drop_header(struct s5p_mfc_ctx *ctx)
+{
+	if (ctx->hdr_buf.virt)
+		s5p_mfc_release_generic_buf(ctx->dev, &ctx->hdr_buf);
+	kfree(ctx->hdr);
+	ctx->hdr = NULL;
+	ctx->hdr_len = 0;
+	ctx->reparse = false;
+}
+
 /* Check whether a context should be run on hardware */
 static int s5p_mfc_ctx_ready(struct s5p_mfc_ctx *ctx)
 {
@@ -638,6 +651,39 @@ static int reqbufs_capture(struct s5p_mfc_dev *dev, struct s5p_mfc_ctx *ctx,
 		ctx->dst_bufs_cnt = 0;
 		ctx->dst_placeholder = false;
 		ctx->capture_state = QUEUE_FREE;
+		/*
+		 * A new set of CAPTURE buffers while decoding, e.g. when the
+		 * client moves to another surface and the pictures of the old
+		 * one never come back: go back to setting up the DPB, so that
+		 * the MFC gets the new addresses once they are all queued.
+		 * The DPB was flushed by the streamoff, and dpb_flush_flag
+		 * keeps the first OUTPUT buffer, a picture and not the
+		 * header, from being dropped by the buffer setup.
+		 */
+		if (ctx->state == MFCINST_RUNNING) {
+			/*
+			 * The MFC only takes a new DPB after a new SEQ_START
+			 * (INIT_BUFFERS alone fails with error 0xd), and the
+			 * client does not send the header again: parse the
+			 * copy kept from the first one.
+			 */
+			if (ctx->hdr_buf.virt)
+				s5p_mfc_release_generic_buf(dev, &ctx->hdr_buf);
+			ctx->reparse = false;
+			if (ctx->hdr) {
+				ctx->hdr_buf.size = ALIGN(ctx->dec_src_buf_size, 512);
+				if (!s5p_mfc_alloc_generic_buf(dev, BANK_L_CTX,
+							       &ctx->hdr_buf)) {
+					memcpy(ctx->hdr_buf.virt, ctx->hdr,
+					       ctx->hdr_len);
+					ctx->reparse = true;
+				}
+			}
+			if (!ctx->reparse)
+				mfc_err("No stream header to set up a new DPB\n");
+			ctx->state = MFCINST_HEAD_PARSED;
+			ctx->dpb_flush_flag = 1;
+		}
 	} else if (ctx->capture_state == QUEUE_FREE &&
 		   ctx->state < MFCINST_HEAD_PARSED) {
 		/*
@@ -1343,6 +1389,18 @@ static void s5p_mfc_buf_queue(struct vb2_buffer *vb)
 	struct s5p_mfc_buf *mfc_buf;
 
 	if (vq->type == V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE) {
+		/* The first buffer is the header: keep it, see reqbufs_capture(). */
+		if (ctx->state == MFCINST_GOT_INST && !ctx->hdr) {
+			void *vaddr = vb2_plane_vaddr(vb, 0);
+			unsigned int len = min_t(unsigned int, MFC_DEC_HDR_MAX,
+					vb2_get_plane_payload(vb, 0));
+
+			if (vaddr && len) {
+				ctx->hdr = kmemdup(vaddr, len, GFP_KERNEL);
+				if (ctx->hdr)
+					ctx->hdr_len = len;
+			}
+		}
 		mfc_buf = &ctx->src_bufs[vb->index];
 		mfc_buf->flags &= ~MFC_BUF_FLAG_USED;
 		spin_lock_irqsave(&dev->irqlock, flags);
