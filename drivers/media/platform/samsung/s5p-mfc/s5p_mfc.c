@@ -543,6 +543,7 @@ static void s5p_mfc_handle_seq_done(struct s5p_mfc_ctx *ctx,
 				 unsigned int reason, unsigned int err)
 {
 	struct s5p_mfc_dev *dev;
+	bool reparsed = false;
 
 	if (!ctx)
 		return;
@@ -578,7 +579,16 @@ static void s5p_mfc_handle_seq_done(struct s5p_mfc_ctx *ctx,
 			ctx->state = MFCINST_HEAD_PARSED;
 			dev_dbg(&dev->plat_dev->dev, "header: %ux%u, DPB %d\n",
 				ctx->img_width, ctx->img_height, ctx->pb_count);
-			v4l2_event_queue_fh(&ctx->fh, &ev_src_ch);
+			/*
+			 * A header parsed again for a new DPB is the same
+			 * stream: the client already has its buffers.
+			 */
+			if (ctx->reparse) {
+				ctx->reparse = false;
+				reparsed = true;
+			} else {
+				v4l2_event_queue_fh(&ctx->fh, &ev_src_ch);
+			}
 		}
 
 		if ((ctx->codec_mode == S5P_MFC_CODEC_H264_DEC ||
@@ -610,6 +620,10 @@ static void s5p_mfc_handle_seq_done(struct s5p_mfc_ctx *ctx,
 	}
 	s5p_mfc_hw_call(dev->mfc_ops, clear_int_flags, dev);
 	clear_work_bit(ctx);
+	/* A new DPB for the same stream: set it up right away. */
+	if (reparsed && ctx->capture_state == QUEUE_BUFS_MMAPED &&
+	    ctx->src_queue_cnt >= 1)
+		set_work_bit(ctx);
 	/* The encoder goes on with the frames already queued. */
 	if (ctx->type == MFCINST_ENCODER &&
 	    ctx->state == MFCINST_HEAD_PRODUCED &&
@@ -1081,6 +1095,10 @@ static int s5p_mfc_release(struct file *file)
 	}
 	if (dev)
 		dev->ctx[ctx->num] = NULL;
+	if (dev && ctx->type == MFCINST_DECODER)
+		s5p_mfc_dec_drop_header(ctx);
+	else
+		kfree(ctx->hdr);
 	s5p_mfc_dec_ctrls_delete(ctx);
 	v4l2_fh_del(&ctx->fh, file);
 	/* vdev is gone if dev is null */

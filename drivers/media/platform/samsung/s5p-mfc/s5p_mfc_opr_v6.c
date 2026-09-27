@@ -2278,6 +2278,14 @@ static void s5p_mfc_try_run_v6(struct s5p_mfc_dev *dev)
 			s5p_mfc_run_init_dec(ctx);
 			break;
 		case MFCINST_HEAD_PARSED:
+			if (ctx->reparse) {
+				/* New DPB while decoding: parse the header again. */
+				s5p_mfc_set_dec_stream_buffer_v6(ctx,
+						ctx->hdr_buf.dma, 0, ctx->hdr_len);
+				dev->curr_ctx = ctx->num;
+				s5p_mfc_init_decode_v6(ctx);
+				break;
+			}
 			ret = s5p_mfc_run_init_dec_buffers(ctx);
 			break;
 		case MFCINST_FLUSH:

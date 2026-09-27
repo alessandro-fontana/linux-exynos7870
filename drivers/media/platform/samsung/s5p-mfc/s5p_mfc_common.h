@@ -677,6 +677,16 @@ struct s5p_mfc_ctx {
 
 	unsigned int dpb_flush_flag;
 	unsigned int head_processed;
+	/*
+	 * Decoder: copy of the stream header, to parse it again when the
+	 * client replaces the CAPTURE buffers while decoding (see
+	 * reqbufs_capture()); hdr_buf is the stream buffer the MFC reads
+	 * it from, reparse the pending SEQ_START.
+	 */
+	void *hdr;
+	unsigned int hdr_len;
+	struct s5p_mfc_priv_buf hdr_buf;
+	bool reparse;
 
 	struct s5p_mfc_priv_buf bank1;
 	struct s5p_mfc_priv_buf bank2;
