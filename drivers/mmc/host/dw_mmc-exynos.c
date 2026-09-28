@@ -44,6 +44,9 @@ struct dw_mci_exynos_priv_data {
 	u32				dqs_delay;
 	u32				saved_dqs_en;
 	u32				saved_strobe_ctrl;
+	/* write CRC status timer for HS400, 0 = keep what the bootloader set */
+	u32				txdt_crc_fastlimit;
+	u32				txdt_crc_initval;
 };
 
 static struct dw_mci_exynos_compatible {
@@ -287,6 +290,16 @@ static void dw_mci_exynos_config_hs400(struct dw_mci *host, u32 timing)
 	if (timing == MMC_TIMING_MMC_HS400) {
 		dqs |= DATA_STROBE_EN;
 		strobe = DQS_CTRL_RD_DELAY(strobe, priv->dqs_delay);
+		/*
+		 * The bootloader leaves the write CRC status timer tuned for
+		 * the speeds it runs at; the vendor kernel sets it for DDR200
+		 * together with the other HS400 settings.
+		 */
+		if (priv->txdt_crc_fastlimit || priv->txdt_crc_initval) {
+			dqs &= ~TXDT_CRC_TIMER_SET(0xff, 0xff);
+			dqs |= TXDT_CRC_TIMER_SET(priv->txdt_crc_fastlimit,
+						  priv->txdt_crc_initval);
+		}
 	} else if (timing == MMC_TIMING_UHS_SDR104) {
 		dqs &= 0xffffff00;
 	} else {
@@ -421,6 +434,11 @@ static int dw_mci_exynos_parse_dt(struct dw_mci *host)
 
 	priv->hs400_timing = SDMMC_CLKSEL_TIMING(timing[0], timing[1],
 						HS400_FIXED_CIU_CLK_DIV);
+
+	of_property_read_u32(np, "samsung,dw-mshc-txdt-crc-timer-fastlimit",
+			     &priv->txdt_crc_fastlimit);
+	of_property_read_u32(np, "samsung,dw-mshc-txdt-crc-timer-initval",
+			     &priv->txdt_crc_initval);
 	host->priv = priv;
 	return 0;
 }

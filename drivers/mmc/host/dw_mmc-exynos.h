@@ -33,6 +33,10 @@
 /* RCLK_EN register defines */
 #define DATA_STROBE_EN			BIT(0)
 #define AXI_NON_BLOCKING_WR	BIT(7)
+#define TXDT_CRC_TIMER_FASTLIMIT(x)	(((x) & 0xFF) << 16)
+#define TXDT_CRC_TIMER_INITVAL(x)	(((x) & 0xFF) << 8)
+#define TXDT_CRC_TIMER_SET(x, y)	(TXDT_CRC_TIMER_FASTLIMIT(x) | \
+					 TXDT_CRC_TIMER_INITVAL(y))
 
 /* DLINE_CTRL register defines */
 #define DQS_CTRL_RD_DELAY(x, y)		(((x) & ~0x3FF) | ((y) & 0x3FF))
