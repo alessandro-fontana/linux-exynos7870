@@ -8,6 +8,7 @@
 #include <linux/module.h>
 #include <linux/platform_device.h>
 #include <linux/clk.h>
+#include <linux/interrupt.h>
 #include <linux/mmc/host.h>
 #include <linux/mmc/mmc.h>
 #include <linux/of.h>
@@ -47,6 +48,8 @@ struct dw_mci_exynos_priv_data {
 	/* write CRC status timer for HS400, 0 = keep what the bootloader set */
 	u32				txdt_crc_fastlimit;
 	u32				txdt_crc_initval;
+	/* the host IRQ is armed as a wakeup source for an SDIO function */
+	bool				wake_irq_armed;
 };
 
 static struct dw_mci_exynos_compatible {
@@ -216,7 +219,25 @@ static int dw_mci_exynos_runtime_resume(struct device *dev)
  */
 static int dw_mci_exynos_suspend_noirq(struct device *dev)
 {
+	struct dw_mci *host = dev_get_drvdata(dev);
+	struct dw_mci_exynos_priv_data *priv = host->priv;
+	struct mmc_host *mmc = host->mmc;
+
 	pm_runtime_get_noresume(dev);
+
+	/*
+	 * An SDIO function that wakes the system through its interrupt (WoWLAN
+	 * on a Wi-Fi chip) needs the controller clocked and its interrupt able
+	 * to wake the CPU: in s2idle the SoC stays powered and the GIC delivers
+	 * it.  Leave the controller running instead of forcing it into runtime
+	 * suspend.
+	 */
+	if (mmc && mmc_card_keep_power(mmc) && mmc_card_wake_sdio_irq(mmc) &&
+	    !enable_irq_wake(host->irq)) {
+		priv->wake_irq_armed = true;
+		return 0;
+	}
+
 	return pm_runtime_force_suspend(dev);
 }
 
@@ -238,9 +259,14 @@ static int dw_mci_exynos_resume_noirq(struct device *dev)
 	u32 clksel;
 	int ret;
 
-	ret = pm_runtime_force_resume(dev);
-	if (ret)
-		return ret;
+	if (priv->wake_irq_armed) {
+		disable_irq_wake(host->irq);
+		priv->wake_irq_armed = false;
+	} else {
+		ret = pm_runtime_force_resume(dev);
+		if (ret)
+			return ret;
+	}
 
 	if (priv->ctrl_type == DW_MCI_TYPE_EXYNOS7 ||
 		priv->ctrl_type == DW_MCI_TYPE_EXYNOS7_SMU ||
