@@ -311,6 +311,16 @@
 			#thermal-sensor-cells = <0>;
 		};
 
+		watchdog_cl0: watchdog@10170000 {
+			compatible = "samsung,exynos7-wdt";
+			reg = <0x10170000 0x100>;
+			interrupts = <GIC_SPI 100 IRQ_TYPE_LEVEL_HIGH>;
+			clocks = <&cmu_peri CLK_GOUT_PERI_WDT_CPUCL0_PCLK>;
+			clock-names = "watchdog";
+			samsung,syscon-phandle = <&pmu_system_controller>;
+			timeout-sec = <30>;
+		};
+
 		cmu_peri: clock-controller@101f0000 {
 			compatible = "samsung,exynos7870-cmu-peri";
 			reg = <0x101f0000 0x1000>;
