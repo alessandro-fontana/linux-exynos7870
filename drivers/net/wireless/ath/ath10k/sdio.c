@@ -2156,6 +2156,14 @@ static int ath10k_sdio_pm_suspend(struct device *device)
 
 	pm_flag = MMC_PM_KEEP_POWER;
 
+	/*
+	 * With WoWLAN armed the firmware wakes the host through the SDIO
+	 * interrupt, so ask the host to leave it working while suspended.
+	 */
+	if (ar->hw->wiphy->wowlan_config &&
+	    (sdio_get_host_pm_caps(func) & MMC_PM_WAKE_SDIO_IRQ))
+		pm_flag |= MMC_PM_WAKE_SDIO_IRQ;
+
 	ret = sdio_set_host_pm_flags(func, pm_flag);
 	if (ret) {
 		pm_caps = sdio_get_host_pm_caps(func);
