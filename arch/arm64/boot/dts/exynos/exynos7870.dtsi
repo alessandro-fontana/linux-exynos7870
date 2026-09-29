@@ -68,6 +68,7 @@
 			compatible = "arm,cortex-a53";
 			reg = <0x0>;
 			enable-method = "psci";
+			cpu-idle-states = <&cpu_sleep>;
 			clocks = <&cmu_cpucl0 CLK_CLUSTER0_SCLK>;
 			clock-names = "cluster0_clk";
 			#cooling-cells = <2>;
@@ -78,6 +79,7 @@
 			compatible = "arm,cortex-a53";
 			reg = <0x1>;
 			enable-method = "psci";
+			cpu-idle-states = <&cpu_sleep>;
 		};
 
 		cpu2: cpu@2 {
@@ -85,6 +87,7 @@
 			compatible = "arm,cortex-a53";
 			reg = <0x2>;
 			enable-method = "psci";
+			cpu-idle-states = <&cpu_sleep>;
 		};
 
 		cpu3: cpu@3 {
@@ -92,6 +95,7 @@
 			compatible = "arm,cortex-a53";
 			reg = <0x3>;
 			enable-method = "psci";
+			cpu-idle-states = <&cpu_sleep>;
 		};
 
 		cpu4: cpu@100 {
@@ -99,6 +103,7 @@
 			compatible = "arm,cortex-a53";
 			reg = <0x100>;
 			enable-method = "psci";
+			cpu-idle-states = <&cpu_sleep>;
 			clocks = <&cmu_cpucl1 CLK_CLUSTER1_SCLK>;
 			clock-names = "cluster1_clk";
 			#cooling-cells = <2>;
@@ -109,6 +114,7 @@
 			compatible = "arm,cortex-a53";
 			reg = <0x101>;
 			enable-method = "psci";
+			cpu-idle-states = <&cpu_sleep>;
 		};
 
 		cpu6: cpu@102 {
@@ -116,6 +122,7 @@
 			compatible = "arm,cortex-a53";
 			reg = <0x102>;
 			enable-method = "psci";
+			cpu-idle-states = <&cpu_sleep>;
 		};
 
 		cpu7: cpu@103 {
@@ -123,6 +130,27 @@
 			compatible = "arm,cortex-a53";
 			reg = <0x103>;
 			enable-method = "psci";
+			cpu-idle-states = <&cpu_sleep>;
+		};
+
+		idle-states {
+			entry-method = "psci";
+
+			/*
+			 * Core power-down. The firmware needs the PMU prepared
+			 * by the kernel (exynos-pmu), and the arch timer is
+			 * lost with the core. Disabled: the system locks up
+			 * under load with it, and cpuidle uses WFI alone.
+			 */
+			cpu_sleep: cpu-sleep {
+				compatible = "arm,idle-state";
+				status = "disabled";
+				arm,psci-suspend-param = <0x10000>;
+				local-timer-stop;
+				entry-latency-us = <35>;
+				exit-latency-us = <90>;
+				min-residency-us = <750>;
+			};
 		};
 	};
 
