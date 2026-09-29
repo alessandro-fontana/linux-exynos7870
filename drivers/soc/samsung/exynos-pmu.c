@@ -148,6 +148,11 @@ static const struct of_device_id exynos_pmu_of_device_ids[] = {
 	}, {
 		.compatible = "samsung,exynos7-pmu",
 	}, {
+#ifdef CONFIG_ARM64
+		.compatible = "samsung,exynos7870-pmu",
+		.data = &exynos7870_pmu_data,
+	}, {
+#endif
 		.compatible = "samsung,exynos850-pmu",
 	},
 	{ /*sentinel*/ },
