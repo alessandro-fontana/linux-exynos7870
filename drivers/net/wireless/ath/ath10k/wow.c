@@ -263,6 +263,66 @@ static int ath10k_wmi_pno_check(struct ath10k *ar, u32 vdev_id,
 	return ret;
 }
 
+/*
+ * Scheduled scan (PNO) while the host is awake, with the same NLO offload
+ * that WoWLAN net-detect programs: the firmware scans on the schedule and
+ * reports a match with WMI_NLO_MATCH_EVENTID.
+ */
+int ath10k_sched_scan_start(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
+			    struct cfg80211_sched_scan_request *req,
+			    struct ieee80211_scan_ies *ies)
+{
+	struct ath10k *ar = hw->priv;
+	struct ath10k_vif *arvif = (void *)vif->drv_priv;
+	struct wmi_pno_scan_req *pno;
+	int ret;
+
+	if (vif->type != NL80211_IFTYPE_STATION)
+		return -EOPNOTSUPP;
+
+	pno = kzalloc(sizeof(*pno), GFP_KERNEL);
+	if (!pno)
+		return -ENOMEM;
+
+	mutex_lock(&ar->conf_mutex);
+	ret = ath10k_wmi_pno_check(ar, arvif->vdev_id, req, pno);
+	if (ret) {
+		ath10k_warn(ar, "invalid sched scan request: %d\n", ret);
+		goto out;
+	}
+
+	ret = ath10k_wmi_wow_config_pno(ar, arvif->vdev_id, pno);
+	if (ret)
+		ath10k_warn(ar, "failed to start sched scan: %d\n", ret);
+out:
+	mutex_unlock(&ar->conf_mutex);
+	kfree(pno);
+	return ret;
+}
+
+int ath10k_sched_scan_stop(struct ieee80211_hw *hw, struct ieee80211_vif *vif)
+{
+	struct ath10k *ar = hw->priv;
+	struct ath10k_vif *arvif = (void *)vif->drv_priv;
+	struct wmi_pno_scan_req *pno;
+	int ret;
+
+	pno = kzalloc(sizeof(*pno), GFP_KERNEL);
+	if (!pno)
+		return -ENOMEM;
+
+	pno->enable = 0;
+	pno->vdev_id = arvif->vdev_id;
+
+	mutex_lock(&ar->conf_mutex);
+	ret = ath10k_wmi_wow_config_pno(ar, arvif->vdev_id, pno);
+	if (ret)
+		ath10k_warn(ar, "failed to stop sched scan: %d\n", ret);
+	mutex_unlock(&ar->conf_mutex);
+	kfree(pno);
+	return ret;
+}
+
 static int ath10k_vif_wow_set_wakeups(struct ath10k_vif *arvif,
 				      struct cfg80211_wowlan *wowlan)
 {

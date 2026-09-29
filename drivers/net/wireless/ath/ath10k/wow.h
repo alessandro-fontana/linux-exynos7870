@@ -18,6 +18,10 @@ int ath10k_wow_op_suspend(struct ieee80211_hw *hw,
 			  struct cfg80211_wowlan *wowlan);
 int ath10k_wow_op_resume(struct ieee80211_hw *hw);
 void ath10k_wow_op_set_wakeup(struct ieee80211_hw *hw, bool enabled);
+int ath10k_sched_scan_start(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
+			    struct cfg80211_sched_scan_request *req,
+			    struct ieee80211_scan_ies *ies);
+int ath10k_sched_scan_stop(struct ieee80211_hw *hw, struct ieee80211_vif *vif);
 
 #else
 

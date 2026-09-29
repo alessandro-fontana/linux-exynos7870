@@ -733,6 +733,13 @@ static void ath10k_wmi_tlv_op_rx(struct ath10k *ar, struct sk_buff *skb)
 	case WMI_TLV_WOW_WAKEUP_HOST_EVENTID:
 		ath10k_wmi_event_wow_wakeup_host(ar, skb);
 		break;
+	case WMI_TLV_NLO_MATCH_EVENTID:
+		ath10k_dbg(ar, ATH10K_DBG_WMI, "wmi tlv nlo match\n");
+		ieee80211_sched_scan_results(ar->hw);
+		break;
+	case WMI_TLV_NLO_SCAN_COMPLETE_EVENTID:
+		ath10k_dbg(ar, ATH10K_DBG_WMI, "wmi tlv nlo scan complete\n");
+		break;
 	case WMI_TLV_DCS_INTERFERENCE_EVENTID:
 		ath10k_wmi_event_dcs_interference(ar, skb);
 		break;
