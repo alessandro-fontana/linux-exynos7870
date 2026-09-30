@@ -96,6 +96,9 @@ static int wiphy_suspend(struct device *dev)
 	struct cfg80211_registered_device *rdev = dev_to_rdev(dev);
 	int ret = 0;
 
+	/* a resume deferred from the previous cycle must finish first */
+	flush_work(&rdev->resume_work);
+
 	rdev->suspend_at = ktime_get_boottime_seconds();
 
 	rtnl_lock();
@@ -130,13 +133,9 @@ out_unlock_rtnl:
 	return ret;
 }
 
-static int wiphy_resume(struct device *dev)
+static int __wiphy_resume(struct cfg80211_registered_device *rdev)
 {
-	struct cfg80211_registered_device *rdev = dev_to_rdev(dev);
 	int ret = 0;
-
-	/* Age scan results with time spent in suspend */
-	cfg80211_bss_age(rdev, ktime_get_boottime_seconds() - rdev->suspend_at);
 
 	rtnl_lock();
 	wiphy_lock(&rdev->wiphy);
@@ -152,6 +151,44 @@ static int wiphy_resume(struct device *dev)
 	rtnl_unlock();
 
 	return ret;
+}
+
+void cfg80211_resume_work(struct work_struct *work)
+{
+	struct cfg80211_registered_device *rdev =
+		container_of(work, struct cfg80211_registered_device,
+			     resume_work);
+
+	__wiphy_resume(rdev);
+}
+
+/*
+ * Without WoWLAN the device was stopped at suspend and the driver starts it
+ * again on resume, which for some devices means booting their firmware:
+ * seconds, during which the whole system waits before thawing user space
+ * (and turning the screen on). Nothing depends on the device being back at
+ * that point, so do it right after, from a work item. Until then the wiphy
+ * stays suspended and nl80211 answers -EBUSY.
+ */
+static int wiphy_resume(struct device *dev)
+{
+	struct cfg80211_registered_device *rdev = dev_to_rdev(dev);
+
+	/* Age scan results with time spent in suspend */
+	cfg80211_bss_age(rdev, ktime_get_boottime_seconds() - rdev->suspend_at);
+
+	/*
+	 * Not a freezable workqueue: wiphy_suspend() flushes this work, and a
+	 * suspend that starts before it ran would wait forever on a frozen
+	 * queue. Here the work starts at once, in parallel with the rest of
+	 * the resume, and holds the RTNL like the synchronous path.
+	 */
+	if (!rdev->wiphy.wowlan_config) {
+		queue_work(system_unbound_wq, &rdev->resume_work);
+		return 0;
+	}
+
+	return __wiphy_resume(rdev);
 }
 
 static SIMPLE_DEV_PM_OPS(wiphy_pm_ops, wiphy_suspend, wiphy_resume);

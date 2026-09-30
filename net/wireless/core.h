@@ -130,11 +130,16 @@ struct cfg80211_registered_device {
 	/* protects the list above */
 	spinlock_t wiphy_work_lock;
 	bool suspended;
+	struct work_struct resume_work;
 
 	/* must be last because of the way we do wiphy_priv(),
 	 * and it should at least be aligned to NETDEV_ALIGN */
 	struct wiphy wiphy __aligned(NETDEV_ALIGN);
 };
+
+#ifdef CONFIG_PM
+void cfg80211_resume_work(struct work_struct *work);
+#endif
 
 static inline
 struct cfg80211_registered_device *wiphy_to_rdev(struct wiphy *wiphy)

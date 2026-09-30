@@ -19337,6 +19337,12 @@ static int nl80211_pre_doit(const struct genl_split_ops *ops,
 		info->user_ptr[0] = rdev;
 	}
 
+	/* the device is not back yet from a deferred resume (sysfs.c) */
+	if (rdev && rdev->suspended) {
+		err = -EBUSY;
+		goto out_unlock;
+	}
+
 	if (internal_flags & NL80211_FLAG_MLO_VALID_LINK_ID) {
 		struct nlattr *link_id = info->attrs[NL80211_ATTR_MLO_LINK_ID];
 

@@ -677,6 +677,9 @@ use_default_name:
 		  cfg80211_mgmt_registrations_update_wk);
 	spin_lock_init(&rdev->mgmt_registrations_lock);
 	INIT_WORK(&rdev->wiphy_work, cfg80211_wiphy_work);
+#ifdef CONFIG_PM
+	INIT_WORK(&rdev->resume_work, cfg80211_resume_work);
+#endif
 	INIT_LIST_HEAD(&rdev->wiphy_work_list);
 	spin_lock_init(&rdev->wiphy_work_lock);
 
@@ -1324,6 +1327,11 @@ void wiphy_unregister(struct wiphy *wiphy)
 
 	if (rdev->wiphy.rfkill)
 		rfkill_unregister(rdev->wiphy.rfkill);
+
+#ifdef CONFIG_PM
+	/* the deferred resume takes the RTNL: wait for it before taking it */
+	flush_work(&rdev->resume_work);
+#endif
 
 	rtnl_lock();
 	wiphy_lock(&rdev->wiphy);
