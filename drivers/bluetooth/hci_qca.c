@@ -1502,9 +1502,12 @@ static int qca_set_speed(struct hci_uart *hu, enum qca_speed_type speed_type)
 			return 0;
 
 		/* Disable flow control for wcn3990 to deassert RTS while
-		 * changing the baudrate of chip and host.
+		 * changing the baudrate of chip and host. ROME answers the
+		 * command at the new speed while the host is still at the
+		 * old one: holding RTS keeps that answer in the chip.
 		 */
 		switch (soc_type) {
+		case QCA_ROME:
 		case QCA_WCN3950:
 		case QCA_WCN3988:
 		case QCA_WCN3990:
@@ -1521,6 +1524,7 @@ static int qca_set_speed(struct hci_uart *hu, enum qca_speed_type speed_type)
 		}
 
 		switch (soc_type) {
+		case QCA_ROME:
 		case QCA_WCN3990:
 			reinit_completion(&qca->drop_ev_comp);
 			set_bit(QCA_DROP_VENDOR_EVENT, &qca->flags);
@@ -1540,6 +1544,7 @@ static int qca_set_speed(struct hci_uart *hu, enum qca_speed_type speed_type)
 
 error:
 		switch (soc_type) {
+		case QCA_ROME:
 		case QCA_WCN3950:
 		case QCA_WCN3988:
 		case QCA_WCN3990:
@@ -1556,6 +1561,7 @@ error:
 		}
 
 		switch (soc_type) {
+		case QCA_ROME:
 		case QCA_WCN3990:
 			/* Wait for the controller to send the vendor event
 			 * for the baudrate change command.
