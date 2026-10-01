@@ -612,7 +612,44 @@ static struct target_type inlinecrypt_target = {
 	.io_hints		= inlinecrypt_io_hints,
 };
 
+#ifdef CONFIG_DM_INLINECRYPT_DEFAULT_KEY
+/*
+ * Android's vold sets up adoptable storage with the "default-key" target,
+ * with the same table syntax: "<cipher> <key> <iv_offset> <dev> <start>
+ * [<#opt> allow_discards sector_size:N iv_large_sectors]". Answer to that
+ * name too. What dm-inlinecrypt leaves out (passing through the inline
+ * encryption of the layer above) is not needed there: file contents
+ * encrypted by fscrypt are simply encrypted again.
+ */
+static struct target_type default_key_target;
+
+static int __init dm_inlinecrypt_init(void)
+{
+	int r;
+
+	r = dm_register_target(&inlinecrypt_target);
+	if (r)
+		return r;
+
+	default_key_target = inlinecrypt_target;
+	default_key_target.name = "default-key";
+	r = dm_register_target(&default_key_target);
+	if (r)
+		dm_unregister_target(&inlinecrypt_target);
+	return r;
+}
+
+static void __exit dm_inlinecrypt_exit(void)
+{
+	dm_unregister_target(&default_key_target);
+	dm_unregister_target(&inlinecrypt_target);
+}
+
+module_init(dm_inlinecrypt_init);
+module_exit(dm_inlinecrypt_exit);
+#else
 module_dm(inlinecrypt);
+#endif
 
 MODULE_AUTHOR("Eric Biggers <ebiggers@google.com>");
 MODULE_AUTHOR("Linlin Zhang <linlin.zhang@oss.qualcomm.com>");
