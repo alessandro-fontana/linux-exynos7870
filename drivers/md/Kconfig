@@ -326,6 +326,15 @@ config DM_INLINECRYPT
 	  take advantage of inline encryption hardware such as that commonly
 	  built into UFS host controllers.
 
+config DM_INLINECRYPT_DEFAULT_KEY
+	bool "Also register the target as Android's default-key"
+	depends on DM_INLINECRYPT
+	help
+	  Android's vold sets up adoptable storage with a device-mapper
+	  target named "default-key", with the table syntax of
+	  dm-inlinecrypt. Say Y to run Android's adoptable storage on this
+	  kernel.
+
 config DM_SNAPSHOT
        tristate "Snapshot target"
        depends on BLK_DEV_DM
