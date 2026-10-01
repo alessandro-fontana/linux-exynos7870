@@ -119,6 +119,21 @@ static int psci_enter_s2idle_domain_idle_state(struct cpuidle_device *dev,
 	return __psci_enter_domain_idle_state(dev, drv, idx, true);
 }
 
+/*
+ * Suspend-to-idle freezes the tick and timekeeping only through a state with
+ * ->enter_s2idle, and never through state 0. Without DT idle states the
+ * driver has WFI alone, as state 0, and CLOCK_MONOTONIC would go on running
+ * while user space is frozen, which user space does not expect (watchdogs
+ * firing on resume). WFI is registered again as state 1 to take it: the
+ * wake-up interrupts still reach the CPU, and no firmware call is involved.
+ */
+static __cpuidle int psci_enter_wfi(struct cpuidle_device *dev,
+				    struct cpuidle_driver *drv, int idx)
+{
+	cpu_do_idle();
+	return idx;
+}
+
 static int psci_idle_cpuhp_up(unsigned int cpu)
 {
 	struct device *pd_dev = __this_cpu_read(psci_cpuidle_data.dev);
@@ -390,23 +405,30 @@ static int psci_idle_init_cpu(struct device *dev, int cpu)
 	strscpy(drv->states[0].desc, "ARM WFI");
 
 	/*
-	 * If no DT idle states are detected (ret == 0) let the driver
-	 * initialization fail accordingly since there is no reason to
-	 * initialize the idle driver if only wfi is supported, the
-	 * default archictectural back-end already executes wfi
-	 * on idle entry.
+	 * With no DT idle states (ret == 0) the driver is still registered
+	 * with WFI alone: the architectural back-end would execute wfi on idle
+	 * entry as well, but only a cpuidle state can take suspend-to-idle
+	 * with the tick frozen (see psci_enter_wfi()).
 	 */
 	ret = dt_init_idle_driver(drv, psci_idle_state_match, 1);
-	if (ret <= 0)
-		return ret ? : -ENODEV;
+	if (ret < 0)
+		return ret;
 
 	/*
 	 * Initialize PSCI idle states.
 	 */
-	ret = psci_cpu_init_idle(dev, drv, cpu, ret);
 	if (ret) {
-		pr_err("CPU %d failed to PSCI idle\n", cpu);
-		return ret;
+		ret = psci_cpu_init_idle(dev, drv, cpu, ret);
+		if (ret) {
+			pr_err("CPU %d failed to PSCI idle\n", cpu);
+			return ret;
+		}
+	} else {
+		drv->states[1] = drv->states[0];
+		drv->states[1].enter = psci_enter_wfi;
+		drv->states[1].enter_s2idle = psci_enter_wfi;
+		strscpy(drv->states[1].desc, "ARM WFI, suspend-to-idle");
+		drv->state_count = 2;
 	}
 
 	ret = cpuidle_register(drv, NULL);
