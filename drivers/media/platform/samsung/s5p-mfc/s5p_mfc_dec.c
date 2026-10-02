@@ -8,6 +8,7 @@
  */
 
 #include <linux/clk.h>
+#include <linux/dma-buf.h>
 #include <linux/interrupt.h>
 #include <linux/io.h>
 #include <linux/module.h>
@@ -1380,6 +1381,24 @@ static void s5p_mfc_stop_streaming(struct vb2_queue *q)
 }
 
 
+/*
+ * vb2 keeps an imported DMABUF mapped from one QBUF to the next, so nothing
+ * writes back the CPU caches of a bitstream buffer that the client filled
+ * through a cached mapping without DMA_BUF_IOCTL_SYNC, as Codec2 does with
+ * its linear blocks. The MFC then reads stale bytes: corrupted references,
+ * or a picture consumed only in part. Write them back before every decode.
+ */
+static int s5p_mfc_buf_prepare(struct vb2_buffer *vb)
+{
+	struct vb2_queue *vq = vb->vb2_queue;
+
+	if (vq->type == V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE &&
+	    vq->memory == VB2_MEMORY_DMABUF && vb->planes[0].dbuf)
+		return dma_buf_end_cpu_access(vb->planes[0].dbuf,
+					      DMA_TO_DEVICE);
+	return 0;
+}
+
 static void s5p_mfc_buf_queue(struct vb2_buffer *vb)
 {
 	struct vb2_queue *vq = vb->vb2_queue;
@@ -1427,6 +1446,7 @@ static void s5p_mfc_buf_queue(struct vb2_buffer *vb)
 static const struct vb2_ops s5p_mfc_dec_qops = {
 	.queue_setup		= s5p_mfc_queue_setup,
 	.buf_init		= s5p_mfc_buf_init,
+	.buf_prepare		= s5p_mfc_buf_prepare,
 	.start_streaming	= s5p_mfc_start_streaming,
 	.stop_streaming		= s5p_mfc_stop_streaming,
 	.buf_queue		= s5p_mfc_buf_queue,
