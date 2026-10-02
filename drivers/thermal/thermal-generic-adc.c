@@ -206,6 +206,16 @@ static int gadc_thermal_probe(struct platform_device *pdev)
 
 	devm_thermal_add_hwmon_sysfs(dev, gti->tz_dev);
 
+	/*
+	 * The temperature is offered to other drivers as an IIO channel, but a
+	 * node nobody can reference (no #io-channel-cells) has no consumer:
+	 * there the channel only reaches userspace, where Android's IIO
+	 * sensors HAL takes a battery thermistor for an ambient temperature
+	 * sensor.
+	 */
+	if (!of_property_present(pdev->dev.of_node, "#io-channel-cells"))
+		return 0;
+
 	return gadc_iio_register(&pdev->dev, gti);
 }
 
