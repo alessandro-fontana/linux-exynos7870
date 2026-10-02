@@ -210,6 +210,8 @@ config CM3232
 config CM3323
 	depends on I2C
 	tristate "Capella CM3323 color light sensor"
+	select IIO_BUFFER
+	select IIO_TRIGGERED_BUFFER
 	help
 	  Say Y here if you want to build a driver for Capella CM3323
 	  color sensor.
