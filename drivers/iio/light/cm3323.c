@@ -13,8 +13,11 @@
 #include <linux/i2c.h>
 #include <linux/mutex.h>
 
+#include <linux/iio/buffer.h>
 #include <linux/iio/iio.h>
 #include <linux/iio/sysfs.h>
+#include <linux/iio/trigger_consumer.h>
+#include <linux/iio/triggered_buffer.h>
 
 #define CM3323_DRV_NAME "cm3323"
 
@@ -47,22 +50,35 @@ struct cm3323_data {
 	struct i2c_client *client;
 	u16 reg_conf;
 	struct mutex mutex;
+	/* Buffer for the triggered capture: four colors and the timestamp. */
+	struct {
+		u16 chans[4];
+		aligned_s64 timestamp;
+	} scan;
 };
 
-#define CM3323_COLOR_CHANNEL(_color, _addr) { \
+#define CM3323_COLOR_CHANNEL(_color, _addr, _si) { \
 	.type = IIO_INTENSITY, \
 	.modified = 1, \
 	.info_mask_separate = BIT(IIO_CHAN_INFO_RAW), \
 	.info_mask_shared_by_all = BIT(IIO_CHAN_INFO_INT_TIME), \
 	.channel2 = IIO_MOD_LIGHT_##_color, \
 	.address = _addr, \
+	.scan_index = _si, \
+	.scan_type = { \
+		.sign = 'u', \
+		.realbits = 16, \
+		.storagebits = 16, \
+		.endianness = IIO_CPU, \
+	}, \
 }
 
 static const struct iio_chan_spec cm3323_channels[] = {
-	CM3323_COLOR_CHANNEL(RED, CM3323_CMD_RED_DATA),
-	CM3323_COLOR_CHANNEL(GREEN, CM3323_CMD_GREEN_DATA),
-	CM3323_COLOR_CHANNEL(BLUE, CM3323_CMD_BLUE_DATA),
-	CM3323_COLOR_CHANNEL(CLEAR, CM3323_CMD_CLEAR_DATA),
+	CM3323_COLOR_CHANNEL(RED, CM3323_CMD_RED_DATA, 0),
+	CM3323_COLOR_CHANNEL(GREEN, CM3323_CMD_GREEN_DATA, 1),
+	CM3323_COLOR_CHANNEL(BLUE, CM3323_CMD_BLUE_DATA, 2),
+	CM3323_COLOR_CHANNEL(CLEAR, CM3323_CMD_CLEAR_DATA, 3),
+	IIO_CHAN_SOFT_TIMESTAMP(4),
 };
 
 static IIO_CONST_ATTR_INT_TIME_AVAIL(CM3323_INT_TIME_AVAILABLE);
@@ -207,6 +223,30 @@ static int cm3323_write_raw(struct iio_dev *indio_dev,
 	}
 }
 
+static irqreturn_t cm3323_trigger_handler(int irq, void *p)
+{
+	struct iio_poll_func *pf = p;
+	struct iio_dev *indio_dev = pf->indio_dev;
+	struct cm3323_data *data = iio_priv(indio_dev);
+	int i, j = 0, ret;
+
+	mutex_lock(&data->mutex);
+	iio_for_each_active_channel(indio_dev, i) {
+		ret = i2c_smbus_read_word_data(data->client,
+					       cm3323_channels[i].address);
+		if (ret < 0)
+			goto out;
+		data->scan.chans[j++] = ret;
+	}
+	iio_push_to_buffers_with_ts(indio_dev, &data->scan, sizeof(data->scan),
+				    iio_get_time_ns(indio_dev));
+out:
+	mutex_unlock(&data->mutex);
+	iio_trigger_notify_done(indio_dev->trig);
+
+	return IRQ_HANDLED;
+}
+
 static const struct iio_info cm3323_info = {
 	.read_raw	= cm3323_read_raw,
 	.write_raw	= cm3323_write_raw,
@@ -242,6 +282,11 @@ static int cm3323_probe(struct i2c_client *client)
 	}
 
 	ret = devm_add_action_or_reset(&client->dev, cm3323_disable, indio_dev);
+	if (ret < 0)
+		return ret;
+
+	ret = devm_iio_triggered_buffer_setup(&client->dev, indio_dev, NULL,
+					      cm3323_trigger_handler, NULL);
 	if (ret < 0)
 		return ret;
 
