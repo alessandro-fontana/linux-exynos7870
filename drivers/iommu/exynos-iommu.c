@@ -432,7 +432,7 @@ static void sysmmu_unblock(struct sysmmu_drvdata *data)
 
 static bool sysmmu_block(struct sysmmu_drvdata *data)
 {
-	int i = 120;
+	int i = 4096;
 
 	writel(CTRL_BLOCK, data->sfrbase + REG_MMU_CTRL);
 	while ((i > 0) && !(readl(data->sfrbase + REG_MMU_STATUS) & 1))
@@ -440,6 +440,8 @@ static bool sysmmu_block(struct sysmmu_drvdata *data)
 
 	if (!(readl(data->sfrbase + REG_MMU_STATUS) & 1)) {
 		sysmmu_unblock(data);
+		/* the caller skips the TLB invalidation */
+		dev_warn_ratelimited(data->sysmmu, "failed to block, TLB not invalidated\n");
 		return false;
 	}
 
