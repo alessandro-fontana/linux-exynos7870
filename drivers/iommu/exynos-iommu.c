@@ -543,6 +543,22 @@ static void __sysmmu_get_version(struct sysmmu_drvdata *data)
 			data->variant = &sysmmu_v7_variant;
 	}
 
+	/*
+	 * Start from a known state: a fault the bootloader left pending, and
+	 * TLB or FLPD cache entries from its use of the block, would otherwise
+	 * meet the first translation.
+	 */
+	if (MMU_MAJ_VER(data->version) >= 5) {
+		u32 st = readl(SYSMMU_REG(data, int_status));
+
+		if (st) {
+			dev_warn(data->sysmmu, "fault left by the bootloader: %#x at %#x\n",
+				 st, readl(data->sfrbase + REG_V5_FAULT_AR_VA));
+			writel(st, SYSMMU_REG(data, int_clear));
+		}
+		__sysmmu_tlb_invalidate(data);
+	}
+
 	__sysmmu_disable_clocks(data);
 }
 
@@ -648,14 +664,25 @@ static void __sysmmu_enable_vid(struct sysmmu_drvdata *data)
 static void __sysmmu_enable(struct sysmmu_drvdata *data)
 {
 	unsigned long flags;
+	int i;
 
 	__sysmmu_enable_clocks(data);
 
 	spin_lock_irqsave(&data->lock, flags);
-	writel(CTRL_BLOCK, data->sfrbase + REG_MMU_CTRL);
+	/*
+	 * CTRL_BLOCK also enables translation: write the configuration and the
+	 * page table base while the block is still in bypass, or a master
+	 * already doing DMA, such as a display scanning out the bootloader's
+	 * framebuffer, has its next accesses walked from a stale base.
+	 */
 	__sysmmu_init_config(data);
 	__sysmmu_set_ptbase(data, data->pgtable);
+	writel(CTRL_BLOCK, data->sfrbase + REG_MMU_CTRL);
+	for (i = 0; i < 4096 && !(readl(data->sfrbase + REG_MMU_STATUS) & 1); i++)
+		;
+	__sysmmu_tlb_invalidate(data);
 	__sysmmu_enable_vid(data);
+	readl(data->sfrbase + REG_MMU_STATUS);
 	writel(CTRL_ENABLE, data->sfrbase + REG_MMU_CTRL);
 	data->active = true;
 	spin_unlock_irqrestore(&data->lock, flags);
