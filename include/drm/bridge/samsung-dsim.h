@@ -126,6 +126,8 @@ struct samsung_dsim {
 	bool swap_dn_dp_clk;
 	bool swap_dn_dp_data;
 	int state;
+	/* Link left running by the bootloader, held until the first enable */
+	bool handover;
 	struct drm_property *brightness;
 	struct completion completed;
 
