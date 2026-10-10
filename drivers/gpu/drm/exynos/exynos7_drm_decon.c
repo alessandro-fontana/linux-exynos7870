@@ -73,6 +73,8 @@ struct decon_context {
 	unsigned long			irq_flags;
 	bool				i80_if;
 	bool				scanout_on;
+	/* Scanning out the bootloader's framebuffer until the first enable */
+	bool				handover;
 	wait_queue_head_t		wait_vsync_queue;
 	atomic_t			wait_vsync_event;
 	unsigned long			underrun_count;
@@ -190,14 +192,47 @@ static void decon_clear_channels(struct decon_context *ctx)
 		decon_wait_for_vblank(ctx);
 }
 
+static bool decon_scanout_running(struct decon_context *ctx)
+{
+	unsigned int win;
+
+	for (win = 0; win < WINDOWS_NR; win++)
+		if (readl(ctx->regs + WINCON(win)) & WINCONx_ENWIN)
+			return true;
+
+	return false;
+}
+
 static int decon_ctx_initialize(struct decon_context *ctx,
 			struct drm_device *drm_dev)
 {
+	bool handover;
+	int ret;
+
 	ctx->drm_dev = drm_dev;
 
-	decon_clear_channels(ctx);
+	/*
+	 * Keep scanning out a framebuffer left by the bootloader until the
+	 * first enable, so that its picture stays on the panel through the
+	 * boot. Only when the framebuffer is a memory region of the DECON:
+	 * the IOMMU then maps it at its physical address.
+	 */
+	handover = of_property_present(ctx->dev->of_node, "memory-region") &&
+		   decon_scanout_running(ctx);
+	if (!handover)
+		decon_clear_channels(ctx);
 
-	return exynos_drm_register_dma(drm_dev, ctx->dev, &ctx->dma_priv);
+	ret = exynos_drm_register_dma(drm_dev, ctx->dev, &ctx->dma_priv);
+	if (ret || !handover)
+		return ret;
+
+	if (pm_runtime_resume_and_get(ctx->dev) < 0) {
+		decon_clear_channels(ctx);
+		return 0;
+	}
+
+	ctx->handover = true;
+	return 0;
 }
 
 static void decon_ctx_remove(struct decon_context *ctx)
@@ -847,10 +882,15 @@ static void decon_atomic_enable(struct exynos_drm_crtc *crtc)
 	struct decon_context *ctx = crtc->ctx;
 	int ret;
 
-	ret = pm_runtime_resume_and_get(ctx->dev);
-	if (ret < 0) {
-		DRM_DEV_ERROR(ctx->dev, "failed to enable DECON device.\n");
-		return;
+	/* The reference taken for the handover becomes the enable's one. */
+	if (ctx->handover) {
+		ctx->handover = false;
+	} else {
+		ret = pm_runtime_resume_and_get(ctx->dev);
+		if (ret < 0) {
+			DRM_DEV_ERROR(ctx->dev, "failed to enable DECON device.\n");
+			return;
+		}
 	}
 
 	decon_init(ctx);
