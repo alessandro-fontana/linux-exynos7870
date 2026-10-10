@@ -835,8 +835,22 @@ static int exynos_sysmmu_probe(struct platform_device *pdev)
 	 * use the first registered sysmmu device for performing
 	 * dma mapping operations on iommu page tables (cpu cache flush)
 	 */
-	if (!dma_dev)
+	if (!dma_dev) {
+		dma_addr_t handle;
+
 		dma_dev = &pdev->dev;
+		/*
+		 * Unmapped sections point at zero_lv2_table: write its zeros
+		 * out to memory, where the page table walker reads them.
+		 */
+		handle = dma_map_single(dma_dev, zero_lv2_table, LV2TABLE_SIZE,
+					DMA_TO_DEVICE);
+		if (dma_mapping_error(dma_dev, handle)) {
+			dma_dev = NULL;
+			ret = -ENOMEM;
+			goto err_dma_set_mask;
+		}
+	}
 
 	pm_runtime_enable(dev);
 
