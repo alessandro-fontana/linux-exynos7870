@@ -1727,10 +1727,24 @@ static void samsung_dsim_atomic_pre_enable(struct drm_bridge *bridge,
 	if (dsi->state & DSIM_STATE_ENABLED)
 		return;
 
-	ret = pm_runtime_resume_and_get(dsi->dev);
-	if (ret < 0) {
-		dev_err(dsi->dev, "failed to enable DSI device.\n");
-		return;
+	if (dsi->handover) {
+		/*
+		 * The clocks and supplies are already held: power the PHY on,
+		 * which resets it, and the link is initialised from scratch.
+		 */
+		ret = phy_power_on(dsi->phy);
+		if (ret < 0) {
+			dev_err(dsi->dev, "cannot enable phy %d\n", ret);
+			pm_runtime_put_sync(dsi->dev);
+			return;
+		}
+		dsi->handover = false;
+	} else {
+		ret = pm_runtime_resume_and_get(dsi->dev);
+		if (ret < 0) {
+			dev_err(dsi->dev, "failed to enable DSI device.\n");
+			return;
+		}
 	}
 
 	dsi->state |= DSIM_STATE_ENABLED;
@@ -2246,6 +2260,39 @@ static const struct drm_bridge_timings samsung_dsim_bridge_timings_de_low = {
 	.input_bus_flags = DRM_BUS_FLAG_DE_LOW,
 };
 
+/*
+ * On exynos7870 the bootloader leaves the link running in video mode, with
+ * the HS clock requested. Keep its clocks and supplies on until the first
+ * enable, so that the picture it shows stays on the panel. The PHY is left
+ * alone: powering it on resets it.
+ */
+static void samsung_dsim_take_over(struct samsung_dsim *dsi)
+{
+	const struct samsung_dsim_driver_data *driver_data = dsi->driver_data;
+
+	if (dsi->plat_data->hw_type != DSIM_TYPE_EXYNOS7870)
+		return;
+
+	if (regulator_bulk_enable(ARRAY_SIZE(dsi->supplies), dsi->supplies))
+		return;
+
+	if (clk_bulk_prepare_enable(driver_data->num_clks, driver_data->clk_data)) {
+		regulator_bulk_disable(ARRAY_SIZE(dsi->supplies), dsi->supplies);
+		return;
+	}
+
+	if (!(samsung_dsim_read(dsi, DSIM_CLKCTRL_REG) &
+	      BIT(driver_data->tx_req_hsclk_bit))) {
+		clk_bulk_disable_unprepare(driver_data->num_clks, driver_data->clk_data);
+		regulator_bulk_disable(ARRAY_SIZE(dsi->supplies), dsi->supplies);
+		return;
+	}
+
+	pm_runtime_set_active(dsi->dev);
+	pm_runtime_get_noresume(dsi->dev);
+	dsi->handover = true;
+}
+
 int samsung_dsim_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
@@ -2311,6 +2358,7 @@ int samsung_dsim_probe(struct platform_device *pdev)
 
 	platform_set_drvdata(pdev, dsi);
 
+	samsung_dsim_take_over(dsi);
 	pm_runtime_enable(dev);
 
 	dsi->bridge.of_node = dev->of_node;
@@ -2331,6 +2379,8 @@ int samsung_dsim_probe(struct platform_device *pdev)
 	return 0;
 
 err_disable_runtime:
+	if (dsi->handover)
+		pm_runtime_put_sync(dev);
 	pm_runtime_disable(dev);
 
 	return ret;
@@ -2341,6 +2391,8 @@ void samsung_dsim_remove(struct platform_device *pdev)
 {
 	struct samsung_dsim *dsi = platform_get_drvdata(pdev);
 
+	if (dsi->handover)
+		pm_runtime_put_sync(&pdev->dev);
 	pm_runtime_disable(&pdev->dev);
 
 	if (dsi->plat_data->host_ops && dsi->plat_data->host_ops->unregister_host)
@@ -2366,7 +2418,11 @@ static int samsung_dsim_suspend(struct device *dev)
 
 	dsi->state &= ~DSIM_STATE_CMD_LPM;
 
-	phy_power_off(dsi->phy);
+	/* A handed-over link never had its PHY powered on by us. */
+	if (dsi->handover)
+		dsi->handover = false;
+	else
+		phy_power_off(dsi->phy);
 
 	clk_bulk_disable_unprepare(driver_data->num_clks, driver_data->clk_data);
 
