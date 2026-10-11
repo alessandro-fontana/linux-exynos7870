@@ -980,15 +980,9 @@ static int hx8279_prepare(struct drm_panel *panel)
 
 	if (hx->handoff) {
 		/*
-		 * Take the regulator references so that the counts stay
-		 * balanced against unprepare(), but leave the hardware
-		 * exactly as the bootloader left it.
-		 */
-		ret = regulator_bulk_enable(ARRAY_SIZE(hx->vregs), hx->vregs);
-		if (ret)
-			return ret;
-
-		/*
+		 * The regulator references were taken at probe: leave the
+		 * hardware exactly as the bootloader left it.
+		 *
 		 * The DriverIC is on whatever page the bootloader left it:
 		 * invalidate the cache so the first page switch is sent.
 		 */
@@ -1396,6 +1390,15 @@ static int hx8279_check_params(struct hx8279 *hx, struct device *dev)
 	return 0;
 }
 
+static void hx8279_handoff_release(void *data)
+{
+	struct hx8279 *hx = data;
+
+	/* Never prepared: drop the references taken at probe */
+	if (hx->handoff)
+		regulator_bulk_disable(ARRAY_SIZE(hx->vregs), hx->vregs);
+}
+
 static int hx8279_probe(struct mipi_dsi_device *dsi)
 {
 	struct device *dev = &dsi->dev;
@@ -1498,6 +1501,24 @@ static int hx8279_probe(struct mipi_dsi_device *dsi)
 	ret = hx8279_init_backlight(hx, dev);
 	if (ret)
 		return ret;
+
+	/*
+	 * Hold the supplies of a panel handed over running until the first
+	 * prepare(): with no consumer enabling them, the regulator core
+	 * switches them off as unused 30 seconds after boot, and the panel
+	 * goes dark if userspace has not started the display by then, as on
+	 * a first boot that decompresses the APEXes. This is done before
+	 * drm_panel_add(), so prepare() cannot run earlier.
+	 */
+	if (hx->handoff) {
+		ret = regulator_bulk_enable(ARRAY_SIZE(hx->vregs), hx->vregs);
+		if (ret)
+			return ret;
+
+		ret = devm_add_action_or_reset(dev, hx8279_handoff_release, hx);
+		if (ret)
+			return ret;
+	}
 
 	drm_panel_add(&hx->panel);
 
