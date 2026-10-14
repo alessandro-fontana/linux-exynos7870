@@ -1,0 +1,1768 @@
+// SPDX-License-Identifier: GPL-2.0
+/*
+ * Samsung Galaxy Tab A 10.1 (2016) - SM-T580 - codename "gtaxlwifi"
+ * SoC: Exynos 7870 (Joshua)
+ *
+ * Wi-Fi only 10.1" tablet with 2 GiB of RAM in two banks, eMMC, microSD,
+ * QCA9377 Wi-Fi (SDIO) and Bluetooth (UART), BCM4752 GPS, S2MPU05 PMIC,
+ * SM5703 charger, fuel gauge and MUIC, STMicro FTS touchscreen, keys and
+ * Hall sensor, Mali-T830 GPU, LIS2HH12 accelerometer, CM3323 light sensor,
+ * front (SR259) and rear (S5K4H5YC) cameras, and audio through the
+ * s1402x mixer and a Realtek RT5659 codec (playback and internal mic).
+ *
+ * This file describes the display as the framebuffer left on by S-BOOT;
+ * exynos7870-gtaxlwifi-decon.dts includes it and replaces that with the
+ * DECON, DSI and the HX8279D panel with backlight.
+ *
+ * Based on arch/arm64/boot/dts/exynos/exynos7870-j6lte.dts
+ * (Kaustabh Chakraborty)
+ *
+ * Copyright (C) 2026 The LineageOS Project
+ */
+
+/dts-v1/;
+#include "exynos7870.dtsi"
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/input/input.h>
+#include <dt-bindings/leds/common.h>
+#include <dt-bindings/interrupt-controller/irq.h>
+
+/ {
+	model = "Samsung Galaxy Tab A 10.1 (2016)";
+	compatible = "samsung,gtaxlwifi", "samsung,exynos7870";
+	chassis-type = "tablet";
+
+	/*
+	 * Non-standard properties read by dtbhtoolExynos, which turns them
+	 * into the DTBH header codes the stock bootloader matches on
+	 * (0x50a6 / 0x217584da). The chip and hw_rev ones are in
+	 * exynos7870.dtsi.
+	 */
+	model_info-platform = "android";
+	model_info-subtype = "samsung";
+
+	aliases {
+		mmc0 = &mmc0;
+		mmc1 = &mmc1;
+		mmc2 = &mmc2;
+		serial0 = &serial0;
+		serial1 = &serial1;
+		serial2 = &serial2;
+	};
+
+	chosen {
+		#address-cells = <2>;
+		#size-cells = <1>;
+		ranges;
+
+		/* ttySAC2 is the debug UART on the whole 7870 family. */
+		stdout-path = &serial2;
+
+		/*
+		 * Framebuffer left active by S-BOOT (s3cfb.bootloaderfb on the
+		 * stock cmdline, bootloader_fb in the vendor DTS). The panel is
+		 * a landscape one mounted rotated by 90 degrees, so the scanout
+		 * is portrait; rotate the console with fbcon=rotate:1.
+		 */
+		framebuffer0: framebuffer@67000000 {
+			compatible = "simple-framebuffer";
+			reg = <0x0 0x67000000 (1200 * 1920 * 4)>;
+			width = <1200>;
+			height = <1920>;
+			stride = <(1200 * 4)>;
+			format = "a8r8g8b8";
+		};
+	};
+
+	/*
+	 * Two banks, as in the vendor DTS. The 28 MiB between them
+	 * (0x7e400000-0x80000000) belong to the secure world: mapping them
+	 * causes an external abort, so the banks must not be merged.
+	 */
+	memory@40000000 {
+		device_type = "memory";
+		reg = <0x0 0x40000000 0x3e400000>;
+	};
+
+	memory@80000000 {
+		device_type = "memory";
+		reg = <0x0 0x80000000 0x40000000>;
+	};
+
+	/*
+	 * Cell ratings and charging parameters from the vendor battery
+	 * DTS. The minimum voltage is the vendor cut-off threshold.
+	 */
+	battery: battery {
+		compatible = "simple-battery";
+		device-chemistry = "lithium-ion";
+		charge-full-design-microamp-hours = <7300000>;
+		voltage-max-design-microvolt = <4350000>;
+		voltage-min-design-microvolt = <3400000>;
+
+		/*
+		 * Float voltage for a new cell: the vendor kernel lowers it
+		 * with the cycle count, which is not tracked here.
+		 */
+		constant-charge-voltage-max-microvolt = <4300000>;
+		constant-charge-current-max-microamp = <2400000>;
+		charge-term-current-microamp = <375000>;
+
+		/*
+		 * Outside this range the charger stops charging and resumes
+		 * 5 degrees inside it. Nothing in the charger watches the
+		 * cell: its thermal regulation is for the die.
+		 */
+		operating-range-celsius = <0 50>;
+	};
+
+	/*
+	 * Battery thermistor, on SoC ADC channel 1. The fuel gauge only
+	 * reports the temperature of its own die.
+	 *
+	 * Table from the vendor battery DTS, converted to millidegrees and
+	 * reversed: thermal-generic-adc wants the ADC values in descending
+	 * order.
+	 */
+	battery_thermistor: thermal-sensor {
+		compatible = "generic-adc-thermal";
+		#thermal-sensor-cells = <0>;
+
+		io-channels = <&adc 1>;
+		io-channel-names = "sensor-channel";
+
+		temperature-lookup-table =
+			<(-20000) 3551>,
+			<(-15000) 3431>,
+			<(-10000) 3284>,
+			<(-5000) 3141>,
+			<0 2964>,
+			<5000 2782>,
+			<10000 2586>,
+			<15000 2392>,
+			<20000 2196>,
+			<25000 2002>,
+			<30000 1816>,
+			<35000 1648>,
+			<40000 1476>,
+			<45000 1310>,
+			<50000 1177>,
+			<55000 1043>,
+			<60000 940>,
+			<65000 838>,
+			<70000 746>,
+			<75000 676>,
+			<80000 581>,
+			<85000 500>,
+			<90000 430>;
+	};
+
+	thermal-zones {
+		battery-thermal {
+			polling-delay = <10000>;
+			polling-delay-passive = <5000>;
+			thermal-sensors = <&battery_thermistor>;
+
+			/*
+			 * No cooling devices: the passive trips only make the
+			 * thermal core send a netlink event on every crossing,
+			 * at the thresholds the Android thermal HAL uses for
+			 * this zone. There is no critical trip, so that a bad
+			 * reading cannot shut the device down; the charger
+			 * stops charging by itself.
+			 */
+			trips {
+				trip-light {
+					temperature = <40000>;
+					hysteresis = <2000>;
+					type = "passive";
+				};
+				trip-moderate {
+					temperature = <42000>;
+					hysteresis = <2000>;
+					type = "passive";
+				};
+				trip-severe {
+					temperature = <45000>;
+					hysteresis = <2000>;
+					type = "passive";
+				};
+				trip-critical {
+					temperature = <48000>;
+					hysteresis = <2000>;
+					type = "passive";
+				};
+				trip-emergency {
+					temperature = <52000>;
+					hysteresis = <2000>;
+					type = "passive";
+				};
+				trip-shutdown {
+					temperature = <60000>;
+					hysteresis = <2000>;
+					type = "passive";
+				};
+			};
+		};
+	};
+
+	/*
+	 * The vendor ION heaps are not replicated: they are reusable CMA
+	 * pools, and the MFC and camera drivers allocate through their
+	 * SysMMUs instead.
+	 */
+	reserved-memory {
+		#address-cells = <2>;
+		#size-cells = <1>;
+		ranges;
+
+		/* Still scanned out by the DECON: keep the kernel off it. */
+		fb_mem: framebuffer@67000000 {
+			reg = <0x0 0x67000000 (1200 * 1920 * 4)>;	/* 0x8CA000 */
+			no-map;
+		};
+
+		/*
+		 * Carveouts from the stock cmdline: unused here, but S-BOOT
+		 * and the secure world write into them.
+		 */
+		ess_mem: debug-snapshot@46000000 {
+			reg = <0x0 0x46000000 0x1000000>;
+			no-map;
+		};
+
+		sec_log_mem: sec-log@47000000 {
+			reg = <0x0 0x47000000 0x100000>;
+			no-map;
+		};
+
+		tima_mem: tima-log@52a00000 {
+			reg = <0x0 0x52a00000 0x200000>;
+			no-map;
+		};
+
+		/*
+		 * Panic log, kept across a warm reset. Placed in bank 1 away
+		 * from the carveouts, the framebuffer and the S-BOOT initrd
+		 * area (0x42000000).
+		 */
+		ramoops@56000000 {
+			compatible = "ramoops";
+			reg = <0x0 0x56000000 0x100000>;
+			console-size = <0x40000>;
+			record-size = <0x40000>;
+			ftrace-size = <0x0>;
+			pmsg-size = <0x40000>;
+		};
+
+		/*
+		 * ECT (Exynos Character Table): the DVFS tables the bootloader
+		 * leaves in RAM. Nothing reads it at run time (the OPP tables
+		 * below were taken from it), but it belongs to S-BOOT and the
+		 * secure world. no-map keeps it out of the linear map, so that
+		 * a parser can memremap() it later without a second, cacheable
+		 * alias.
+		 */
+		ect_mem: ect@90000000 {
+			reg = <0x0 0x90000000 0x14000>;
+			no-map;
+		};
+	};
+
+	/*
+	 * Touchscreen supplies: external rails switched by GPIOs, not by the
+	 * PMIC.
+	 */
+	tsp_dvdd: regulator-tsp-dvdd {
+		compatible = "regulator-fixed";
+		regulator-name = "tsp_dvdd";
+		regulator-min-microvolt = <1800000>;
+		regulator-max-microvolt = <1800000>;
+		gpio = <&gpd1 4 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+	};
+
+	tsp_avdd: regulator-tsp-avdd {
+		compatible = "regulator-fixed";
+		regulator-name = "tsp_avdd";
+		regulator-min-microvolt = <3300000>;
+		regulator-max-microvolt = <3300000>;
+		gpio = <&gpd1 6 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+	};
+
+	/*
+	 * Camera 2.8 V analog rails: external LDOs enabled by gpd4-4 (rear)
+	 * and gpd4-3 (front).
+	 */
+	cam_avdd: regulator-cam-avdd {
+		compatible = "regulator-fixed";
+		regulator-name = "VDD_CAM_A2P8";
+		regulator-min-microvolt = <2800000>;
+		regulator-max-microvolt = <2800000>;
+		gpio = <&gpd4 4 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+	};
+
+	vtcam_avdd: regulator-vtcam-avdd {
+		compatible = "regulator-fixed";
+		regulator-name = "VDD_VTCAM_A2P8";
+		regulator-min-microvolt = <2800000>;
+		regulator-max-microvolt = <2800000>;
+		gpio = <&gpd4 3 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+	};
+
+	/*
+	 * QCA9377 Wi-Fi on SDIO (mmc1). WLAN_EN is driven as an active-low
+	 * reset by mmc-pwrseq-simple; the delays are those of the vendor
+	 * cnss_sdio driver.
+	 *
+	 * The supply is an external DC-DC with a fixed output and no declared
+	 * voltage. It cannot be the vmmc-supply, because the MMC core derives
+	 * the OCR mask from the regulator voltages, so it is kept always on.
+	 *
+	 * WLAN_HOST_WAKE (gpa2-2) is not used: ath10k relies on the in-band
+	 * SDIO interrupt.
+	 */
+	wlan_pwr: regulator-wlan {
+		compatible = "regulator-fixed";
+		regulator-name = "cnss_dcdc_en";
+		gpio = <&gpa0 6 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+		startup-delay-us = <4000>;
+		regulator-boot-on;
+		regulator-always-on;
+	};
+
+	pwrseq_wlan: pwrseq-wlan {
+		compatible = "mmc-pwrseq-simple";
+		reset-gpios = <&gpd3 6 GPIO_ACTIVE_LOW>;	/* WLAN_EN */
+		post-power-on-delay-ms = <10>;
+	};
+
+	/*
+	 * microSD slot supply: external 2.8 V regulator enabled by gpc0-0.
+	 *
+	 * No pinctrl on purpose: according to the vendor kernel the
+	 * configuration registers of gpc0-0 and gpc0-2 are swapped, so a
+	 * pinctrl group on gpc0-0 would configure gpc0-2. The data path is
+	 * not swapped, and gpiolib drives the right pin.
+	 */
+	vdd_fixed_mmc2: regulator-fixed-mmc2 {
+		compatible = "regulator-fixed";
+		regulator-name = "vdd_fixed_mmc2";
+		regulator-min-microvolt = <2800000>;
+		regulator-max-microvolt = <2800000>;
+		gpio = <&gpc0 0 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+	};
+
+	gpio-keys {
+		compatible = "gpio-keys";
+		label = "GPIO Keys";
+
+		pinctrl-names = "default";
+		pinctrl-0 = <&key_power &key_voldown &key_volup &key_home &hall_cover>;
+
+		key-power {
+			label = "Power Key";
+			gpios = <&gpa0 0 GPIO_ACTIVE_LOW>;
+			linux,code = <KEY_POWER>;		/* 116 */
+			wakeup-source;
+		};
+
+		key-voldown {
+			label = "Volume Down Key";
+			gpios = <&gpa2 1 GPIO_ACTIVE_LOW>;
+			linux,code = <KEY_VOLUMEDOWN>;		/* 114 */
+		};
+
+		key-volup {
+			label = "Volume Up Key";
+			gpios = <&gpa2 0 GPIO_ACTIVE_LOW>;
+			linux,code = <KEY_VOLUMEUP>;		/* 115 */
+		};
+
+		key-home {
+			label = "Home Key";
+			gpios = <&gpa1 7 GPIO_ACTIVE_LOW>;
+			linux,code = <KEY_HOMEPAGE>;		/* 172 */
+			wakeup-source;
+		};
+
+		/*
+		 * Magnetic cover: SW_LID reads 1 while the magnet is near.
+		 * Opening the cover wakes the tablet.
+		 */
+		hall-cover {
+			label = "Hall Sensor";
+			gpios = <&gpa1 3 GPIO_ACTIVE_LOW>;
+			linux,input-type = <EV_SW>;
+			linux,code = <SW_LID>;			/* 0 */
+			wakeup-source;
+		};
+	};
+};
+
+&oscclk {
+	clock-frequency = <26000000>;
+};
+
+/* Debug UART, 115200 8N1 through the 619 kOhm jig. */
+&serial2 {
+	status = "okay";
+};
+
+/*
+ * Bluetooth half of the QCA9377 (H4 with IBS). It shares only the
+ * supply, wlan_pwr, with the Wi-Fi.
+ *
+ * The vendor kernel numbers the UARTs differently: its serial_0
+ * (UART_BTWIFIFM) is serial1 here, its serial_1 (UART_SENSOR) is
+ * serial0.
+ *
+ * BT_WAKE and BT_HOST_WAKE are not used: on QCA_ROME, IBS is in-band.
+ * There is no sleep clock to declare: the 32 kHz clock does not come
+ * from the AP.
+ *
+ * max-speed must let the ~33 KB rampatch download fit within
+ * HCI_CMD_TIMEOUT (2 s), which starts when a command is queued: that
+ * takes 2.9 s at 115200 and 0.36 s at 921600.
+ */
+&serial1 {
+	status = "okay";
+
+	bluetooth {
+		compatible = "qcom,qca9377-bt";
+		enable-gpios = <&gpd4 0 GPIO_ACTIVE_HIGH>;	/* BT_EN */
+		max-speed = <921600>;
+	};
+};
+
+/*
+ * Broadcom BCM4752 GPS on serial0. The chip does not speak NMEA: the
+ * proprietary gpsd drives the UART as a plain tty (ttySAC0) and powers
+ * the chip by writing "1"/"0" to a file, which is what an rfkill state
+ * accepts.
+ */
+&serial0 {
+	status = "okay";
+};
+
+/ {
+	gps {
+		compatible = "rfkill-gpio";
+		label = "bcm4752";
+		radio-type = "gps";
+		shutdown-gpios = <&gpc2 2 GPIO_ACTIVE_HIGH>;	/* GPS_EN */
+		default-blocked;
+	};
+};
+
+/*
+ * Mali-T830. OPPs: the steps the vendor enables (ECT domain
+ * "dvfs_g3d"), at the ASV table 5 group 5 voltages fused in the unit
+ * they were read from, plus the 20 mV margin of the vendor Mali driver,
+ * rounded to the 6.25 mV PMIC step.
+ */
+&gpu {
+	status = "okay";
+
+	mali-supply = <&buck2_reg>;
+	operating-points-v2 = <&gpu_opp_table>;
+
+	gpu_opp_table: opp-table {
+		compatible = "operating-points-v2";
+
+		opp-343000000 {
+			opp-hz = /bits/ 64 <343000000>;
+			opp-microvolt = <625000>;
+		};
+
+		opp-450000000 {
+			opp-hz = /bits/ 64 <450000000>;
+			opp-microvolt = <662500>;
+		};
+
+		opp-545000000 {
+			opp-hz = /bits/ 64 <545000000>;
+			opp-microvolt = <706250>;
+		};
+
+		opp-676000000 {
+			opp-hz = /bits/ 64 <676000000>;
+			opp-microvolt = <768750>;
+		};
+
+		opp-728000000 {
+			opp-hz = /bits/ 64 <728000000>;
+			opp-microvolt = <787500>;
+		};
+
+		opp-845000000 {
+			opp-hz = /bits/ 64 <845000000>;
+			opp-microvolt = <862500>;
+		};
+
+		opp-1001000000 {
+			opp-hz = /bits/ 64 <1001000000>;
+			opp-microvolt = <956250>;
+		};
+	};
+};
+
+/*
+ * CPU OPPs: the ECT levels (dvfs_cpucl0/1) that have a valid voltage in
+ * ASV table 5. The frequencies are the exact ECT ones: they must match
+ * the PLL rate table and the clk-cpu configurations, or the transition
+ * is rejected.
+ *
+ * Voltages: ASV table 5, group 5, plus 25 mV, which covers the
+ * COLD_VOLT_OFFSET the vendor kernel applies at low temperature and
+ * which is not implemented here. opp-suspend is the vendor boot and
+ * resume level.
+ *
+ * Both clusters share BUCK1: the wide maximum in opp-microvolt lets the
+ * regulator core keep the rail at the highest request.
+ */
+/ {
+	cpucl0_opp_table: opp-table-cpucl0 {
+		compatible = "operating-points-v2";
+		opp-shared;
+
+		opp-1586000000 {
+			opp-hz = /bits/ 64 <1586000000>;
+			opp-microvolt = <1068750 1068750 1300000>;
+			clock-latency-ns = <140000>;
+		};
+
+		opp-1482000000 {
+			opp-hz = /bits/ 64 <1482000000>;
+			opp-microvolt = <1018750 1018750 1300000>;
+			clock-latency-ns = <140000>;
+		};
+
+		opp-1352000000 {
+			opp-hz = /bits/ 64 <1352000000>;
+			opp-microvolt = <968750 968750 1300000>;
+			clock-latency-ns = <140000>;
+		};
+
+		opp-1248000000 {
+			opp-hz = /bits/ 64 <1248000000>;
+			opp-microvolt = <925000 925000 1300000>;
+			clock-latency-ns = <140000>;
+		};
+
+		opp-1144000000 {
+			opp-hz = /bits/ 64 <1144000000>;
+			opp-microvolt = <881250 881250 1300000>;
+			clock-latency-ns = <140000>;
+		};
+
+		opp-1014000000 {
+			opp-hz = /bits/ 64 <1014000000>;
+			opp-microvolt = <831250 831250 1300000>;
+			clock-latency-ns = <140000>;
+		};
+
+		opp-902200000 {
+			opp-hz = /bits/ 64 <902200000>;
+			opp-microvolt = <787500 787500 1300000>;
+			clock-latency-ns = <140000>;
+			opp-suspend;
+		};
+
+		opp-838500000 {
+			opp-hz = /bits/ 64 <838500000>;
+			opp-microvolt = <762500 762500 1300000>;
+			clock-latency-ns = <140000>;
+		};
+
+		opp-756600000 {
+			opp-hz = /bits/ 64 <756600000>;
+			opp-microvolt = <743750 743750 1300000>;
+			clock-latency-ns = <140000>;
+		};
+
+		opp-676000000 {
+			opp-hz = /bits/ 64 <676000000>;
+			opp-microvolt = <718750 718750 1300000>;
+			clock-latency-ns = <140000>;
+		};
+
+		opp-546000000 {
+			opp-hz = /bits/ 64 <546000000>;
+			opp-microvolt = <675000 675000 1300000>;
+			clock-latency-ns = <140000>;
+		};
+
+		opp-448500000 {
+			opp-hz = /bits/ 64 <448500000>;
+			opp-microvolt = <650000 650000 1300000>;
+			clock-latency-ns = <140000>;
+		};
+
+		opp-342875000 {
+			opp-hz = /bits/ 64 <342875000>;
+			opp-microvolt = <625000 625000 1300000>;
+			clock-latency-ns = <140000>;
+		};
+	};
+
+	cpucl1_opp_table: opp-table-cpucl1 {
+		compatible = "operating-points-v2";
+		opp-shared;
+
+		opp-1586000000 {
+			opp-hz = /bits/ 64 <1586000000>;
+			opp-microvolt = <1068750 1068750 1300000>;
+			clock-latency-ns = <140000>;
+		};
+
+		opp-1482000000 {
+			opp-hz = /bits/ 64 <1482000000>;
+			opp-microvolt = <1018750 1018750 1300000>;
+			clock-latency-ns = <140000>;
+		};
+
+		opp-1352000000 {
+			opp-hz = /bits/ 64 <1352000000>;
+			opp-microvolt = <968750 968750 1300000>;
+			clock-latency-ns = <140000>;
+		};
+
+		opp-1248000000 {
+			opp-hz = /bits/ 64 <1248000000>;
+			opp-microvolt = <925000 925000 1300000>;
+			clock-latency-ns = <140000>;
+		};
+
+		opp-1144000000 {
+			opp-hz = /bits/ 64 <1144000000>;
+			opp-microvolt = <881250 881250 1300000>;
+			clock-latency-ns = <140000>;
+		};
+
+		opp-1014000000 {
+			opp-hz = /bits/ 64 <1014000000>;
+			opp-microvolt = <831250 831250 1300000>;
+			clock-latency-ns = <140000>;
+		};
+
+		opp-902200000 {
+			opp-hz = /bits/ 64 <902200000>;
+			opp-microvolt = <787500 787500 1300000>;
+			clock-latency-ns = <140000>;
+			opp-suspend;
+		};
+
+		opp-838500000 {
+			opp-hz = /bits/ 64 <838500000>;
+			opp-microvolt = <762500 762500 1300000>;
+			clock-latency-ns = <140000>;
+		};
+
+		opp-756600000 {
+			opp-hz = /bits/ 64 <756600000>;
+			opp-microvolt = <743750 743750 1300000>;
+			clock-latency-ns = <140000>;
+		};
+
+		opp-676000000 {
+			opp-hz = /bits/ 64 <676000000>;
+			opp-microvolt = <718750 718750 1300000>;
+			clock-latency-ns = <140000>;
+		};
+
+		opp-546000000 {
+			opp-hz = /bits/ 64 <546000000>;
+			opp-microvolt = <675000 675000 1300000>;
+			clock-latency-ns = <140000>;
+		};
+
+		opp-448500000 {
+			opp-hz = /bits/ 64 <448500000>;
+			opp-microvolt = <650000 650000 1300000>;
+			clock-latency-ns = <140000>;
+		};
+
+		opp-342875000 {
+			opp-hz = /bits/ 64 <342875000>;
+			opp-microvolt = <625000 625000 1300000>;
+			clock-latency-ns = <140000>;
+		};
+	};
+};
+
+&cpu0 {
+	cpu-supply = <&buck1_reg>;
+	operating-points-v2 = <&cpucl0_opp_table>;
+};
+
+&cpu1 {
+	cpu-supply = <&buck1_reg>;
+	operating-points-v2 = <&cpucl0_opp_table>;
+};
+
+&cpu2 {
+	cpu-supply = <&buck1_reg>;
+	operating-points-v2 = <&cpucl0_opp_table>;
+};
+
+&cpu3 {
+	cpu-supply = <&buck1_reg>;
+	operating-points-v2 = <&cpucl0_opp_table>;
+};
+
+&cpu4 {
+	cpu-supply = <&buck1_reg>;
+	operating-points-v2 = <&cpucl1_opp_table>;
+};
+
+&cpu5 {
+	cpu-supply = <&buck1_reg>;
+	operating-points-v2 = <&cpucl1_opp_table>;
+};
+
+&cpu6 {
+	cpu-supply = <&buck1_reg>;
+	operating-points-v2 = <&cpucl1_opp_table>;
+};
+
+&cpu7 {
+	cpu-supply = <&buck1_reg>;
+	operating-points-v2 = <&cpucl1_opp_table>;
+};
+
+/*
+ * S2MPU05 PMIC. Only the regulators with a consumer here are declared;
+ * the other bucks stay as the bootloader set them.
+ */
+&hsi2c0 {
+	#address-cells = <1>;
+	#size-cells = <0>;
+	status = "okay";
+
+	pmic@66 {
+		compatible = "samsung,s2mpu05-pmic";
+		reg = <0x66>;
+		interrupt-parent = <&gpa0>;
+		interrupts = <2 IRQ_TYPE_LEVEL_LOW>;
+
+		pinctrl-names = "default";
+		pinctrl-0 = <&pmic_irq>;
+
+		regulators {
+			/*
+			 * BUCK1 (VDD_CPU) supplies both clusters; the regulator
+			 * core aggregates their requests through the OPP
+			 * voltage ranges.
+			 */
+			buck1_reg: buck1 {
+				regulator-name = "vdd_cpu";
+				regulator-min-microvolt = <500000>;
+				regulator-max-microvolt = <1300000>;
+				regulator-ramp-delay = <12000>;
+				regulator-boot-on;
+				regulator-always-on;
+			};
+
+			/*
+			 * BUCK2 (G3D) is declared for GPU DVFS: without
+			 * constraints, voltage changes are rejected. Range and
+			 * ramp from the vendor kernel; always on, as there,
+			 * because it supplies a SoC power domain.
+			 */
+			buck2_reg: buck2 {
+				regulator-name = "vdd_g3d";
+				regulator-min-microvolt = <500000>;
+				regulator-max-microvolt = <1300000>;
+				regulator-ramp-delay = <12000>;
+				regulator-boot-on;
+				regulator-always-on;
+			};
+
+			/*
+			 * microSD vqmmc: the 1.8-2.8 V range is needed for UHS
+			 * signalling.
+			 */
+			vdd_ldo2: ldo2 {
+				regulator-name = "vqmmc";
+				regulator-min-microvolt = <1800000>;
+				regulator-max-microvolt = <2800000>;
+				regulator-ramp-delay = <12000>;
+			};
+
+			/*
+			 * LIS2HH12 accelerometer I/O rail, as in the vendor
+			 * kernel. The chip VDD is not described there either:
+			 * it is already on at boot.
+			 */
+			vdd_ldo3: ldo3 {
+				regulator-name = "vdd_ldo3";
+				regulator-min-microvolt = <800000>;
+				regulator-max-microvolt = <2375000>;
+				regulator-ramp-delay = <12000>;
+				regulator-boot-on;
+				regulator-always-on;
+			};
+
+			/* USB DRD PHY 3.3 V supply (vdd33). */
+			vdd_ldo8: ldo8 {
+				regulator-name = "vdd_ldo8";
+				regulator-min-microvolt = <1800000>;
+				regulator-max-microvolt = <3375000>;
+				regulator-ramp-delay = <12000>;
+			};
+
+			/* eMMC vmmc */
+			vdd_ldo26: ldo26 {
+				regulator-name = "vemmc";
+				regulator-min-microvolt = <1800000>;
+				regulator-max-microvolt = <3375000>;
+				regulator-ramp-delay = <12000>;
+				regulator-boot-on;
+			};
+
+			/* eMMC vqmmc */
+			vdd_ldo27: ldo27 {
+				regulator-name = "vqemmc";
+				regulator-min-microvolt = <800000>;
+				regulator-max-microvolt = <2375000>;
+				regulator-ramp-delay = <12000>;
+				regulator-boot-on;
+			};
+
+			/*
+			 * 1.8 V I/O of both cameras, switched by the sensor
+			 * drivers.
+			 */
+			vdd_ldo34: ldo34 {
+				regulator-name = "VDDIO_1.8V_CAM";
+				regulator-min-microvolt = <1800000>;
+				regulator-max-microvolt = <1800000>;
+			};
+
+			/*
+			 * BCM4752 GPS supply. No driver requests it, and S-BOOT
+			 * leaves it off: always on, as in the vendor kernel.
+			 */
+			vdd_ldo31: ldo31 {
+				regulator-name = "vdd_ldo31";
+				regulator-min-microvolt = <2800000>;
+				regulator-max-microvolt = <2800000>;
+				regulator-boot-on;
+				regulator-always-on;
+			};
+
+			/*
+			 * CM3323 light sensor supply. The vendor driver kept it
+			 * on through a private property; the mainline driver
+			 * does not request it at all.
+			 */
+			vdd_ldo33: ldo33 {
+				regulator-name = "vdd_ldo33";
+				regulator-min-microvolt = <2800000>;
+				regulator-max-microvolt = <2800000>;
+				regulator-boot-on;
+				regulator-always-on;
+			};
+
+			/*
+			 * Panel supply. With simple-framebuffer nothing
+			 * requests it, so it is always on; the -decon variant
+			 * hands it to the panel driver.
+			 */
+			vdd_ldo35: ldo35 {
+				regulator-name = "LCD_1P8";
+				regulator-min-microvolt = <1800000>;
+				regulator-max-microvolt = <1800000>;
+				regulator-boot-on;
+				regulator-always-on;
+			};
+
+			/*
+			 * RT5659 codec supplies (LDO25 at 1.8 V, LDO32 at
+			 * 3.3 V), as mapped by the vendor sound DTS. Always on:
+			 * the mainline rt5659 driver does not request supplies,
+			 * and its power-on sequence (ldo1-en and reset GPIOs on
+			 * the codec node) needs both rails up.
+			 */
+			vdd_ldo25: ldo25 {
+				regulator-name = "VDD_CODEC_1P8";
+				regulator-min-microvolt = <1800000>;
+				regulator-max-microvolt = <1800000>;
+				regulator-boot-on;
+				regulator-always-on;
+			};
+
+			vdd_ldo32: ldo32 {
+				regulator-name = "VDD_CODEC_3P3";
+				regulator-min-microvolt = <3300000>;
+				regulator-max-microvolt = <3300000>;
+				regulator-boot-on;
+				regulator-always-on;
+			};
+
+			/*
+			 * Rear camera autofocus motor (DW9807), switched by its
+			 * driver.
+			 */
+			vdd_ldo29: ldo29 {
+				regulator-name = "VDD_CAM_AF_2P8";
+				regulator-min-microvolt = <2800000>;
+				regulator-max-microvolt = <2800000>;
+			};
+
+			/*
+			 * 1.2 V core of the rear sensor, switched by the sensor
+			 * driver. S-BOOT leaves it on at 1.8 V.
+			 */
+			vdd_ldo30: ldo30 {
+				regulator-name = "VDD_CAM_CORE_1P2";
+				regulator-min-microvolt = <1200000>;
+				regulator-max-microvolt = <1200000>;
+			};
+		};
+	};
+};
+
+&mmc0 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&sd0_clk &sd0_cmd &sd0_rdqs &sd0_bus1 &sd0_bus4 &sd0_bus8>;
+
+	vmmc-supply = <&vdd_ldo26>;
+	vqmmc-supply = <&vdd_ldo27>;
+
+	bus-width = <8>;
+	fifo-depth = <64>;
+
+	/*
+	 * cap-mmc-highspeed is needed to leave the 25 MHz legacy mode; DDR52
+	 * also relies on the driver caps of controller 0, which the mmc0 alias
+	 * selects. HS200 runs the card at 199.875 MHz (CIU at bus_pll / 2,
+	 * ciu-div 3); the sample phase comes from tuning.
+	 */
+	cap-mmc-highspeed;
+	mmc-hs200-1_8v;
+
+	/*
+	 * HS400 with the vendor kernel's values. The vendor ddr200-timing
+	 * <1 0 4 0> (ciu-div, fine drive, drive, sample) becomes <0 4> here,
+	 * with the fixed HS400 divider. The read strobe delay (RD_DQS_DELAY of
+	 * HS400_DLINE_CTRL) and the write CRC status timer are the vendor
+	 * DDR200 values. The vendor kernel also used Enhanced Strobe, which
+	 * dw_mmc lacks: this is plain HS400, entered after HS200 tuning.
+	 */
+	mmc-hs400-1_8v;
+	samsung,dw-mshc-hs400-timing = <0 4>;
+	samsung,read-strobe-delay = <0x75>;
+	samsung,dw-mshc-txdt-crc-timer-fastlimit = <0x34>;
+	samsung,dw-mshc-txdt-crc-timer-initval = <0x38>;
+
+	/*
+	 * Mainline two-cell <sample drive> timings: the vendor four-cell values
+	 * (div, x, drive, sample) are reordered, not copied.
+	 */
+	samsung,dw-mshc-ciu-div = <3>;
+	samsung,dw-mshc-sdr-timing = <0 4>;
+	samsung,dw-mshc-ddr-timing = <2 4>;
+	non-removable;
+
+	status = "okay";
+};
+
+/*
+ * QCA9377 Wi-Fi on SDIO. ddr-timing is unused but required by
+ * dw_mci_exynos_parse_dt(). The address and size cells are for the wifi@1
+ * child.
+ */
+&mmc1 {
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	pinctrl-names = "default";
+	pinctrl-0 = <&sd1_clk &sd1_cmd &sd1_bus1 &sd1_bus4>;
+
+	mmc-pwrseq = <&pwrseq_wlan>;
+
+	bus-width = <4>;
+	fifo-depth = <64>;
+	samsung,dw-mshc-ciu-div = <3>;
+	samsung,dw-mshc-sdr-timing = <0 3>;
+	samsung,dw-mshc-ddr-timing = <1 2>;
+	non-removable;
+	cap-sd-highspeed;
+	cap-sdio-irq;
+	keep-power-in-suspend;
+	/*
+	 * WoWLAN: in suspend the firmware wakes the host through the SDIO
+	 * interrupt. The out-of-band line of the vendor kernel (gpa2-2) is not
+	 * driven under ath10k.
+	 */
+	wakeup-source;
+
+	status = "okay";
+
+	/*
+	 * SDIO function 1. The bootloader adds local-mac-address from the EFS.
+	 */
+	wifi@1 {
+		reg = <1>;
+	};
+};
+
+/*
+ * microSD, wired as on the other 7870 boards. The timings are the vendor ones
+ * reordered: <3 0 3 0> is <0 3> and <3 0 2 1> is <1 2>. The vendor SDR50 drive
+ * strength cannot be expressed, as mainline uses sdr-timing for every SDR mode.
+ *
+ * Unlike the other 7870 boards, card detect uses the gpa0-1 interrupt rather
+ * than broken-cd polling, which also debounces the insertion; the two cannot be
+ * combined. cap-sd-highspeed is needed for 50 MHz: the core does not infer it
+ * from the UHS flags.
+ */
+&mmc2 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&sd2_clk &sd2_cmd &sd2_bus1 &sd2_bus4 &dwmmc2_irq>;
+
+	vmmc-supply = <&vdd_fixed_mmc2>;
+	vqmmc-supply = <&vdd_ldo2>;
+
+	bus-width = <4>;
+	card-detect-delay = <200>;
+	fifo-depth = <64>;
+	samsung,dw-mshc-ciu-div = <3>;
+	samsung,dw-mshc-sdr-timing = <0 3>;
+	samsung,dw-mshc-ddr-timing = <1 2>;
+	cap-sd-highspeed;
+	sd-uhs-sdr50;
+	sd-uhs-sdr104;
+	cd-gpios = <&gpa0 1 GPIO_ACTIVE_LOW>;
+	disable-wp;
+
+	status = "okay";
+};
+
+&usbdrd {
+	vdd33-supply = <&vdd_ldo8>;
+
+	status = "okay";
+
+	/*
+	 * Nothing reports a role to the dwc3 role switch, and without one the
+	 * UDC is not registered: force peripheral mode.
+	 */
+	usb@0 {
+		dr_mode = "peripheral";
+	};
+};
+
+/*
+ * SoC ADC, not described in exynos7870.dtsi; address and interrupt from the
+ * vendor kernel. With "samsung,exynos7-adc" every read times out, hence the
+ * dedicated compatible.
+ *
+ * The supply is not known (the vendor DTS does not describe it either); it is
+ * on at boot, and the driver falls back to a dummy regulator.
+ */
+&soc {
+	adc: adc@10550000 {
+		compatible = "samsung,exynos7870-adc";
+		reg = <0x10550000 0x100>;
+
+		interrupts = <GIC_SPI 395 IRQ_TYPE_LEVEL_HIGH>;
+
+		clocks = <&cmu_mif CLK_GOUT_MIF_WRAP_ADC_IF_PCLK_S0>;
+		clock-names = "adc";
+
+		#io-channel-cells = <1>;
+	};
+};
+
+/*
+ * Audio: LPASS wrapper and audio DMA, with the I2S and the mixer as children,
+ * populated once the wrapper has released their resets. The CMU_DISPAUD clocks
+ * and resets are shared with the display.
+ *
+ * The wrapper maps only the DISPAUD_CFG word: bits 0-3 are the active-high soft
+ * resets of MIXER/MI2S/AMP/ADMA. The word at +0xc belongs to syscon_disp.
+ *
+ * The vendor kernel loads the PL330 microcode into the LPASS SRAM with
+ * extensions mainline lacks; here it stays in DRAM, which the DMAC reaches
+ * through the same AXI master as the audio buffers. periphid from the vendor
+ * kernel.
+ */
+&soc {
+	lpass: audio-subsystem@148f1000 {
+		compatible = "samsung,exynos7870-lpass";
+		reg = <0x148f1000 0x4>;
+
+		clocks = <&cmu_dispaud CLK_GOUT_DISPAUD_APB_AUD>,
+			 <&cmu_dispaud CLK_FOUT_DISPAUD_AUD_PLL>,
+			 <&cmu_dispaud CLK_DOUT_DISPAUD_MI2S>;
+		clock-names = "apb_aud", "fout_aud_pll", "dout_mi2s";
+
+		#address-cells = <1>;
+		#size-cells = <1>;
+		ranges;
+
+		adma: dma-controller@14890000 {
+			compatible = "arm,pl330", "arm,primecell";
+			reg = <0x14890000 0x1000>;
+			interrupts = <GIC_SPI 73 IRQ_TYPE_LEVEL_HIGH>;
+
+			clocks = <&cmu_dispaud CLK_GOUT_DISPAUD_BUS>;
+			clock-names = "apb_pclk";
+
+			#dma-cells = <1>;
+			arm,primecell-periphid = <0x341330>;
+		};
+
+		/*
+		 * I2S0 has the register layout of the i2sv5_i2s1 variant. Both
+		 * opclks point to the same gate, so the RCLKSRC mux does not
+		 * matter. DMA channels from the vendor kernel.
+		 */
+		i2s0: i2s@148a0000 {
+			compatible = "samsung,exynos7-i2s1";
+			reg = <0x148a0000 0x100>;
+			interrupts = <GIC_SPI 69 IRQ_TYPE_LEVEL_HIGH>;
+
+			dmas = <&adma 0>, <&adma 2>;
+			dma-names = "tx", "rx";
+
+			clocks = <&cmu_dispaud CLK_GOUT_DISPAUD_APB_AUD>,
+				 <&cmu_dispaud CLK_GOUT_DISPAUD_MI2S_AUD_I2SCODCLKI>,
+				 <&cmu_dispaud CLK_GOUT_DISPAUD_MI2S_AUD_I2SCODCLKI>;
+			clock-names = "iis", "i2s_opclk0", "i2s_opclk1";
+
+			pinctrl-names = "default";
+			pinctrl-0 = <&i2s_extcodec_bus>;
+
+			/* MI2S clock at 2048 x 48 kHz */
+			assigned-clocks = <&cmu_dispaud CLK_DOUT_DISPAUD_MI2S>;
+			assigned-clock-rates = <98304019>;
+
+			#sound-dai-cells = <1>;
+		};
+
+		/*
+		 * s1402x digital mixer, between I2S0 and the codec, which is
+		 * wired to its AMP port.
+		 */
+		audmixer: audio-mixer@14880000 {
+			compatible = "samsung,s1402x";
+			reg = <0x14880000 0x200>;
+
+			clocks = <&cmu_dispaud CLK_DOUT_DISPAUD_MIXER>,
+				 <&cmu_dispaud CLK_GOUT_DISPAUD_MIXER_AUD_SYSCLK>;
+			clock-names = "audmixer_dout", "audmixer_aclk";
+
+			#sound-dai-cells = <1>;
+		};
+	};
+};
+
+/*
+ * I2S pins towards the external codec, with the settings of the vendor
+ * i2s_pmic_bus_extcodec group.
+ */
+&pinctrl_dispaud {
+	i2s_extcodec_bus: i2s-extcodec-bus-pins {
+		samsung,pins = "gpz1-0", "gpz1-1", "gpz1-2", "gpz1-3";
+		samsung,pin-function = <2>;
+		samsung,pin-pud = <3>;
+		samsung,pin-drv = <2>;
+	};
+};
+
+/*
+ * Realtek RT5659 codec. The internal microphone is differential on IN3P/IN3N;
+ * the in3/in4-differential properties are read by the driver but not yet listed
+ * in the binding schema.
+ */
+&i2c5 {
+	status = "okay";
+
+	/*
+	 * Without an SDA delay this controller samples badly and reads return
+	 * zero. Values from the vendor kernel.
+	 */
+	samsung,i2c-sda-delay = <100>;
+	samsung,i2c-max-bus-freq = <400000>;
+
+	audio_codec: audio-codec@1b {
+		compatible = "realtek,rt5659";
+		reg = <0x1b>;
+
+		pinctrl-names = "default";
+		pinctrl-0 = <&codec_ctrl>;
+
+		/*
+		 * The codec interrupt (gpd3-7) is left out: it only serves the
+		 * codec's own jack detection, done through gpa0-5 instead, and
+		 * rt5659_irq() can queue jack_detect_work before the component
+		 * probe initializes it.
+		 */
+
+		realtek,ldo1-en-gpios = <&gpd3 2 GPIO_ACTIVE_HIGH>;
+		realtek,reset-gpios = <&gpd3 3 GPIO_ACTIVE_HIGH>;
+
+		realtek,in3-differential;
+		realtek,in4-differential;
+	};
+};
+
+/*
+ * Test card for the SoC chain alone (I2S0 to mixer, no codec), an alternative
+ * to the sound card below.
+ */
+/ {
+	sound_test: sound-test {
+		status = "disabled";
+		compatible = "simple-audio-card";
+		simple-audio-card,name = "gtaxl-soc-chain-test";
+		simple-audio-card,format = "i2s";
+		simple-audio-card,bitclock-master = <&cpu_dai_test>;
+		simple-audio-card,frame-master = <&cpu_dai_test>;
+
+		cpu_dai_test: simple-audio-card,cpu {
+			sound-dai = <&i2s0 0>;
+		};
+
+		simple-audio-card,codec {
+			sound-dai = <&audmixer 0>;
+		};
+	};
+};
+
+/*
+ * Sound card: one dai_link with two codecs, mixer AP0 and RT5659 AIF1. Routing
+ * from the vendor sound node.
+ */
+/ {
+	sound {
+		status = "okay";
+		compatible = "samsung,gtaxl-rt5659";
+		model = "gtaxlwifi";
+
+		i2s-controller = <&i2s0>;
+		audio-mixer = <&audmixer>;
+		audio-codec = <&audio_codec>;
+
+		pinctrl-names = "default";
+		pinctrl-0 = <&jack_det>;
+
+		/*
+		 * Headphone detection is external to the codec, on gpa0-5: high
+		 * at rest, low on insertion. The property name is the con-id
+		 * passed by snd_soc_jack_add_gpios(). The polarity is set here
+		 * and not in the driver, as setting both would cancel out.
+		 */
+		headset-det-gpios = <&gpa0 5 GPIO_ACTIVE_LOW>;
+
+		audio-routing =
+			"SPK", "SPOL",
+			"SPK", "SPOR",
+			"HP", "HPOL",
+			"HP", "HPOR",
+			"RCV", "MONOOUT",
+			"IN1P", "Headset Mic",
+			"IN3P", "MICBIAS2",
+			"IN3P", "Main Mic",
+			"IN3N", "Main Mic";
+	};
+};
+
+&pinctrl_alive {
+	key_power: key-power-pins {
+		samsung,pins = "gpa0-0";
+		samsung,pin-function = <EXYNOS_PIN_FUNC_EINT>;
+		samsung,pin-pud = <EXYNOS_PIN_PULL_NONE>;
+		samsung,pin-drv = <EXYNOS5433_PIN_DRV_FAST_SR1>;
+	};
+
+	key_voldown: key-voldown-pins {
+		samsung,pins = "gpa2-1";
+		samsung,pin-function = <EXYNOS_PIN_FUNC_EINT>;
+		samsung,pin-pud = <EXYNOS_PIN_PULL_NONE>;
+		samsung,pin-drv = <EXYNOS5433_PIN_DRV_FAST_SR1>;
+	};
+
+	key_volup: key-volup-pins {
+		samsung,pins = "gpa2-0";
+		samsung,pin-function = <EXYNOS_PIN_FUNC_EINT>;
+		samsung,pin-pud = <EXYNOS_PIN_PULL_NONE>;
+		samsung,pin-drv = <EXYNOS5433_PIN_DRV_FAST_SR1>;
+	};
+
+	/* Headphone jack detect: EINT and no pull, as in the vendor kernel. */
+	jack_det: jack-det-pins {
+		samsung,pins = "gpa0-5";
+		samsung,pin-function = <EXYNOS_PIN_FUNC_EINT>;
+		samsung,pin-pud = <EXYNOS_PIN_PULL_NONE>;
+		samsung,pin-drv = <EXYNOS5433_PIN_DRV_FAST_SR1>;
+	};
+
+	key_home: key-home-pins {
+		samsung,pins = "gpa1-7";
+		samsung,pin-function = <EXYNOS_PIN_FUNC_EINT>;
+		samsung,pin-pud = <EXYNOS_PIN_PULL_NONE>;
+		samsung,pin-drv = <EXYNOS5433_PIN_DRV_FAST_SR1>;
+	};
+
+	/*
+	 * Hall sensor of the magnetic cover, low while the magnet is near. The
+	 * pin is not documented in the vendor sources; it was identified on the
+	 * hardware.
+	 */
+	hall_cover: hall-cover-pins {
+		samsung,pins = "gpa1-3";
+		samsung,pin-function = <EXYNOS_PIN_FUNC_EINT>;
+		samsung,pin-pud = <EXYNOS_PIN_PULL_NONE>;
+		samsung,pin-drv = <EXYNOS5433_PIN_DRV_FAST_SR1>;
+	};
+
+	/* S2MPU05 PMIC IRQ, as on the J6 */
+	pmic_irq: pmic-irq-pins {
+		samsung,pins = "gpa0-2";
+		samsung,pin-pud = <EXYNOS_PIN_PULL_UP>;
+		samsung,pin-drv = <EXYNOS5433_PIN_DRV_FAST_SR4>;
+	};
+
+	touch_irq: touch-irq-pins {
+		samsung,pins = "gpa0-4";
+		samsung,pin-function = <EXYNOS_PIN_FUNC_EINT>;
+		samsung,pin-pud = <EXYNOS_PIN_PULL_NONE>;
+		samsung,pin-drv = <EXYNOS5433_PIN_DRV_FAST_SR1>;
+	};
+
+	/* SM5703 MFD IRQ; the MUIC has its own line, below. */
+	if_pmic_irq: if-pmic-irq-pins {
+		samsung,pins = "gpa2-7";
+		samsung,pin-function = <EXYNOS_PIN_FUNC_INPUT>;
+		samsung,pin-pud = <EXYNOS_PIN_PULL_NONE>;
+		samsung,pin-drv = <EXYNOS5433_PIN_DRV_FAST_SR1>;
+	};
+
+	/* MUIC IRQ: active low, and nothing else holds it high at rest. */
+	muic_irq: muic-irq-pins {
+		samsung,pins = "gpa2-6";
+		samsung,pin-function = <EXYNOS_PIN_FUNC_INPUT>;
+		samsung,pin-pud = <EXYNOS_PIN_PULL_UP>;
+		samsung,pin-drv = <EXYNOS5433_PIN_DRV_FAST_SR1>;
+	};
+
+	fuel_irq: fuel-irq-pins {
+		samsung,pins = "gpa0-3";
+		samsung,pin-function = <EXYNOS_PIN_FUNC_INPUT>;
+		samsung,pin-pud = <EXYNOS_PIN_PULL_NONE>;
+		samsung,pin-drv = <EXYNOS5433_PIN_DRV_FAST_SR1>;
+	};
+
+	/*
+	 * microSD card detect: the pull-up is on the slot, and the line goes
+	 * low with a card inserted.
+	 */
+	dwmmc2_irq: dwmmc2-irq-pins {
+		samsung,pins = "gpa0-1";
+		samsung,pin-function = <EXYNOS_PIN_FUNC_EINT>;
+		samsung,pin-pud = <EXYNOS_PIN_PULL_NONE>;
+		samsung,pin-drv = <EXYNOS5433_PIN_DRV_FAST_SR1>;
+	};
+};
+
+/*
+ * nCHGEN of the SM5703: a high level turns the input stage off, whatever the
+ * registers say.
+ */
+&pinctrl_top {
+	chg_en: chg-en-pins {
+		samsung,pins = "gpd1-3";
+		samsung,pin-function = <EXYNOS_PIN_FUNC_OUTPUT>;
+		samsung,pin-pud = <EXYNOS_PIN_PULL_NONE>;
+		samsung,pin-drv = <EXYNOS5433_PIN_DRV_FAST_SR1>;
+	};
+
+	/*
+	 * Codec LDO_EN and RESET, driven high at boot as in the vendor kernel:
+	 * S-BOOT leaves both pins as inputs.
+	 */
+	codec_ctrl: codec-ctrl-pins {
+		samsung,pins = "gpd3-2", "gpd3-3";
+		samsung,pin-function = <EXYNOS_PIN_FUNC_OUTPUT>;
+		samsung,pin-pud = <EXYNOS_PIN_PULL_NONE>;
+		samsung,pin-drv = <EXYNOS5433_PIN_DRV_FAST_SR1>;
+		samsung,pin-val = <1>;
+	};
+};
+
+/*
+ * STMicroelectronics FingerTipS touchscreen ("stm,fts_touch" in the vendor
+ * kernel), with two capacitive keys and no key backlight.
+ */
+&i2c1 {
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	/*
+	 * Bus timing from the vendor kernel: with the defaults the touchscreen
+	 * does not answer.
+	 */
+	samsung,i2c-sda-delay = <100>;
+	samsung,i2c-max-bus-freq = <400000>;
+
+	status = "okay";
+
+	touchscreen@49 {
+		compatible = "st,stmfts";
+		reg = <0x49>;
+
+		interrupt-parent = <&gpa0>;
+		interrupts = <4 IRQ_TYPE_LEVEL_LOW>;
+
+		pinctrl-names = "default";
+		pinctrl-0 = <&touch_irq>;
+
+		touchscreen-size-x = <1199>;
+		touchscreen-size-y = <1919>;
+		touch-key-connected;
+
+		vdd-supply = <&tsp_dvdd>;
+		avdd-supply = <&tsp_avdd>;
+	};
+};
+
+/*
+ * Silicon Mitus SM5703: charger, regulators and flash LED at 0x49 on i2c4, fuel
+ * gauge at 0x71 on i2c0, MUIC at 0x25 on i2c2. The fuel gauge does not depend
+ * on the MFD.
+ *
+ * Without the charger driver the chip limits the input current to 450 mA, less
+ * than the system draws with the screen on.
+ */
+&i2c0 {
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	samsung,i2c-sda-delay = <100>;
+	samsung,i2c-max-bus-freq = <400000>;
+
+	status = "okay";
+
+	/*
+	 * The tables are specific to this model's cell and come from the vendor
+	 * battery DTS (battery_table0/1/2: discharge, charge, soc). The voltage
+	 * unit is 1/2.048 mV: 0x2400 is 4500 mV.
+	 *
+	 * The interrupt fires when the charge drops below alert-soc-percent or
+	 * the voltage below 3125 mV.
+	 */
+	fuel-gauge@71 {
+		compatible = "siliconmitus,sm5703-fuelgauge";
+		reg = <0x71>;
+
+		interrupt-parent = <&gpa0>;
+		interrupts = <3 IRQ_TYPE_EDGE_FALLING>;
+
+		pinctrl-names = "default";
+		pinctrl-0 = <&fuel_irq>;
+
+		monitored-battery = <&battery>;
+
+		siliconmitus,battery-table-discharge =
+			<0x1400 0x1b88 0x1ce5 0x1d35 0x1d5a 0x1d78 0x1ddd 0x1e37
+			 0x1e78 0x1ed7 0x1efb 0x1f72 0x2008 0x2133 0x220c 0x2400>;
+		siliconmitus,battery-table-charge =
+			<0x1400 0x1b88 0x1ce5 0x1d35 0x1d5a 0x1d78 0x1ddd 0x1e37
+			 0x1e78 0x1ed7 0x1efb 0x1f72 0x2008 0x2133 0x220c 0x2400>;
+		siliconmitus,battery-table-soc =
+			<0x0 0x81 0x1f7 0x28c 0x36d 0x658 0xaba 0x1207
+			 0x1954 0x1f2b 0x20a1 0x238d 0x2964 0x31dc 0x371e 0x3749>;
+
+		siliconmitus,rce-values = <0x0749 0x0580 0x0371>;
+		siliconmitus,dtcd-value = <0x1>;
+		siliconmitus,rs-values = <0x9b 0x47a 0x3800 0x00a4>;
+		siliconmitus,vit-period = <0x3506>;
+		siliconmitus,mix-values = <0x0503 0x0004>;
+		siliconmitus,topoff-soc = <0x0 0x5>;
+		siliconmitus,volt-cal = <0x809e>;
+		siliconmitus,curr-cal = <0x7a85>;
+		siliconmitus,temp-std = <25>;
+		siliconmitus,temp-offset = <10>;
+		siliconmitus,temp-offset-cal = <0x1>;
+		siliconmitus,charge-offset-cal = <(-1)>;
+		siliconmitus,tem-poff = <3400 50 3350 50>;
+		siliconmitus,alert-soc-percent = <2>;
+	};
+};
+
+&i2c4 {
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	samsung,i2c-sda-delay = <100>;
+	samsung,i2c-max-bus-freq = <400000>;
+
+	status = "okay";
+
+	/* SM5703 charger, regulators and flash LED */
+	pmic@49 {
+		compatible = "siliconmitus,sm5703";
+		reg = <0x49>;
+
+		interrupt-parent = <&gpa2>;
+		interrupts = <7 IRQ_TYPE_EDGE_FALLING>;
+
+		pinctrl-names = "default";
+		pinctrl-0 = <&if_pmic_irq>;
+
+		reset-gpios = <&gpc7 4 GPIO_ACTIVE_LOW>;
+
+		charger {
+			compatible = "siliconmitus,sm5703-charger";
+
+			monitored-battery = <&battery>;
+			extcon = <&muic>;
+
+			pinctrl-names = "default";
+			pinctrl-0 = <&chg_en>;
+			enable-gpios = <&gpd1 3 GPIO_ACTIVE_LOW>;
+
+			/*
+			 * A ceiling, reached only when the MUIC reports a
+			 * dedicated charger; on a USB port the driver stops at
+			 * 500 mA. Value from the vendor kernel.
+			 */
+			input-current-limit-microamp = <1650000>;
+		};
+
+		/*
+		 * Rear camera flash LED, currents from the vendor kernel. The
+		 * LED is controlled over I2C; the external control pins used by
+		 * the vendor kernel (gpd3-5, gpd3-7) are left alone.
+		 */
+		flash {
+			compatible = "siliconmitus,sm5703-flash";
+
+			led {
+				function = LED_FUNCTION_FLASH;
+				color = <LED_COLOR_ID_WHITE>;
+				led-max-microamp = <150000>;
+				flash-max-microamp = <1200000>;
+				flash-max-timeout-us = <1600000>;
+			};
+		};
+	};
+};
+
+/*
+ * SM5703 MUIC, handled by extcon-sm5502. Its interrupt is gpa2-6; gpa2-7 is the
+ * MFD one.
+ */
+&i2c2 {
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	samsung,i2c-sda-delay = <100>;
+	samsung,i2c-max-bus-freq = <400000>;
+
+	status = "okay";
+
+	muic: extcon@25 {
+		compatible = "siliconmitus,sm5703-muic";
+		reg = <0x25>;
+
+		interrupt-parent = <&gpa2>;
+		interrupts = <6 IRQ_TYPE_EDGE_FALLING>;
+
+		pinctrl-names = "default";
+		pinctrl-0 = <&muic_irq>;
+	};
+};
+
+/*
+ * LIS2HH12 accelerometer ("K2HH" in the vendor kernel) and CM3323 light sensor.
+ * The accelerometer interrupt (gpa0-7) is not used: polling is enough for
+ * screen rotation.
+ */
+&i2c7 {
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	samsung,i2c-sda-delay = <100>;
+	samsung,i2c-max-bus-freq = <400000>;
+
+	status = "okay";
+
+	accelerometer@1d {
+		compatible = "st,lis2hh12";
+		reg = <0x1d>;
+
+		vddio-supply = <&vdd_ldo3>;
+
+		/*
+		 * The matrix maps the axes the driver reports to the Android
+		 * device frame, including the chip's sign convention, hence the
+		 * negative determinant. The vendor kernel used the same map
+		 * (negate_z).
+		 */
+		mount-matrix =  "1",  "0",  "0",
+			        "0",  "1",  "0",
+			        "0",  "0", "-1";
+	};
+
+	/*
+	 * CM3323 colour sensor: the driver exposes red, green, blue and clear
+	 * intensities, not illuminance, so lux has to be computed by the
+	 * consumer.
+	 */
+	light-sensor@10 {
+		compatible = "capella,cm3323";
+		reg = <0x10>;
+	};
+};
+
+/*
+ * Front camera, SK hynix SR259, one MIPI lane to CSIS1. Reset and standby are
+ * high while running. MCLK is the 26 MHz oscillator, as in the vendor kernel;
+ * the sensor PLL gives a 351 MHz link (26 / 4 * 54), 70.2 Mpixel/s at 10 bits.
+ */
+&hsi2c3 {
+	clock-frequency = <400000>;
+	status = "okay";
+
+	camera@30 {
+		compatible = "hynix,sr259";
+		reg = <0x30>;
+
+		clocks = <&cmu_mif CLK_GOUT_MIF_CMU_ISP_SENSOR1>;
+		assigned-clocks = <&cmu_mif CLK_MOUT_MIF_CMU_ISP_SENSOR1>,
+				  <&cmu_mif CLK_DOUT_MIF_CMU_ISP_SENSOR1>;
+		assigned-clock-parents = <&oscclk>, <0>;
+		assigned-clock-rates = <0>, <26000000>;
+
+		pinctrl-names = "default";
+		pinctrl-0 = <&fimc_is_mclk1_fn>;
+
+		vddio-supply = <&vdd_ldo34>;
+		avdd-supply = <&vtcam_avdd>;
+		reset-gpios = <&gpf3 1 GPIO_ACTIVE_LOW>;
+		enable-gpios = <&gpa1 5 GPIO_ACTIVE_HIGH>;
+
+		orientation = <0>;
+		/*
+		 * With the tablet upright in portrait, the top of the scene is
+		 * on the right of the raw frame.
+		 */
+		rotation = <90>;
+
+		port {
+			sr259_out: endpoint {
+				data-lanes = <1>;
+				link-frequencies = /bits/ 64 <351000000>;
+				remote-endpoint = <&csis1_in>;
+			};
+		};
+	};
+};
+
+&csis {
+	status = "okay";
+};
+
+&csis0_port {
+	csis0_in: endpoint {
+		data-lanes = <1 2 3 4>;
+		remote-endpoint = <&s5k4h5yc_out>;
+	};
+};
+
+&csis1_port {
+	csis1_in: endpoint {
+		data-lanes = <1>;
+		remote-endpoint = <&sr259_out>;
+	};
+};
+
+/*
+ * Rear autofocus (DW9807) and the module calibration EEPROM (infinity and macro
+ * AF positions at 0x100 and 0x108).
+ */
+&hsi2c2 {
+	clock-frequency = <400000>;
+	status = "okay";
+
+	rear_vcm: lens@c {
+		compatible = "dongwoon,dw9807-vcm";
+		reg = <0x0c>;
+		vdd-supply = <&vdd_ldo29>;
+		/*
+		 * Settings from the vendor kernel: SAC3, prescaler x1, 11.7 ms
+		 * period. In direct mode the lens rings for several frames
+		 * after each step.
+		 */
+		dongwoon,sac-mode = <3>;
+		dongwoon,vcm-prescale = <1>;
+		dongwoon,sac-timing = <0x36>;
+	};
+
+	/*
+	 * The bus answers only with the sensor I/O rail on (the pull-ups):
+	 * at24 switches it on for every read.
+	 */
+	eeprom@58 {
+		compatible = "atmel,24c64";
+		reg = <0x58>;
+		pagesize = <32>;
+		read-only;
+		vcc-supply = <&vdd_ldo34>;
+	};
+};
+
+/*
+ * Rear camera, Samsung S5K4H5YC, four lanes to CSIS0, which shares its PHY with
+ * the panel's DSIM0. Link: 26 / 6 * 159 = 689 Mbit/s per lane, 344.5 MHz.
+ */
+&hsi2c1 {
+	clock-frequency = <400000>;
+	status = "okay";
+
+	camera@37 {
+		compatible = "samsung,s5k4h5yc";
+		reg = <0x37>;
+
+		clocks = <&cmu_mif CLK_GOUT_MIF_CMU_ISP_SENSOR0>;
+		assigned-clocks = <&cmu_mif CLK_MOUT_MIF_CMU_ISP_SENSOR0>,
+				  <&cmu_mif CLK_DOUT_MIF_CMU_ISP_SENSOR0>;
+		assigned-clock-parents = <&oscclk>, <0>;
+		assigned-clock-rates = <0>, <26000000>;
+
+		pinctrl-names = "default";
+		pinctrl-0 = <&fimc_is_mclk0_fn>;
+
+		avdd-supply = <&cam_avdd>;
+		dvdd-supply = <&vdd_ldo30>;
+		vddio-supply = <&vdd_ldo34>;
+		reset-gpios = <&gpf3 3 GPIO_ACTIVE_LOW>;
+
+		orientation = <1>;
+		/*
+		 * Unlike the front camera, the top of the scene is on the left
+		 * of the raw frame.
+		 */
+		rotation = <270>;
+		lens-focus = <&rear_vcm>;
+
+		port {
+			s5k4h5yc_out: endpoint {
+				data-lanes = <1 2 3 4>;
+				link-frequencies = /bits/ 64 <344500000>;
+				remote-endpoint = <&csis0_in>;
+			};
+		};
+	};
+};

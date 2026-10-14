@@ -1,0 +1,118 @@
+// SPDX-License-Identifier: GPL-2.0
+/*
+ * Samsung Galaxy Tab A 10.1 (2016) - SM-T580 - "gtaxlwifi"
+ * Variant with the native display: DECON + DSI + HX8279D panel.
+ *
+ * Only the display part of the base DTS changes. simpledrm and the DECON cannot
+ * share the bootloader framebuffer, so a board uses one DTB or the other.
+ *
+ * Copyright (C) 2026 The LineageOS Project
+ */
+
+#include "exynos7870-gtaxlwifi.dts"
+
+/*
+ * Drop the S-BOOT framebuffer exposed to simpledrm. The DECON takes over
+ * the same memory through memory-region, below.
+ */
+/delete-node/ &framebuffer0;
+
+/ {
+	model = "Samsung Galaxy Tab A 10.1 (2016) (DECON)";
+
+	/*
+	 * Panel supply: an external DC-DC switched by gpd3-4, with the 15 ms
+	 * delay of the vendor kernel. The output voltage is not known; the
+	 * value only satisfies the 3.0-5.0 V check of the panel driver.
+	 */
+	lcd_buck: regulator-lcd-buck {
+		compatible = "regulator-fixed";
+		regulator-name = "vdd_lcd_buck";
+		regulator-boot-on;
+		regulator-min-microvolt = <5000000>;
+		regulator-max-microvolt = <5000000>;
+		gpio = <&gpd3 4 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+		regulator-enable-ramp-delay = <15000>;
+
+		pinctrl-names = "default";
+		pinctrl-0 = <&lcd_buck_en>;
+	};
+};
+
+/*
+ * Handoff from the bootloader framebuffer, as on the J6: the reserved region
+ * also declares an identity mapping in the DECON IOMMU, so the block does not
+ * fault between probe and the first modeset.
+ */
+&fb_mem {
+	iommu-addresses = <&decon 0x67000000 (1200 * 1920 * 4)>;
+};
+
+&decon {
+	memory-region = <&fb_mem>;
+
+	status = "okay";
+};
+
+/*
+ * samsung-dsim derives the PLL PMS from burst-clock-frequency. 980 Mbps per
+ * lane is the vendor setting (PMS <3 226 1> from 26 MHz): 3.92 Gbps on four
+ * lanes against the 3.83 Gbps needed at 24 bpp.
+ */
+&dsi {
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	samsung,burst-clock-frequency = <980000000>;
+	samsung,esc-clock-frequency = <16000000>;
+	samsung,pll-clock-frequency = <26000000>;
+
+	status = "okay";
+
+	panel@0 {
+		compatible = "boe,hx8279d-gtaxl";
+		reg = <0>;
+
+		/* vdd: external DC-DC on gpd3-4; iovcc: LDO35 at 1.8 V */
+		vdd-supply = <&lcd_buck>;
+		iovcc-supply = <&vdd_ldo35>;
+
+		/*
+		 * In this driver a logical 1 releases the reset, and the panel
+		 * leaves reset with the pin high.
+		 */
+		reset-gpios = <&gpd4 1 GPIO_ACTIVE_HIGH>;
+
+		pinctrl-names = "default";
+		pinctrl-0 = <&lcd_rst>;
+	};
+};
+
+/*
+ * The panel driver owns the supply now, and switches it off with the panel.
+ */
+&vdd_ldo35 {
+	/delete-property/ regulator-always-on;
+};
+
+/*
+ * No samsung,pin-val: S-BOOT leaves the pins configured with the panel on, and
+ * the driver takes them as they are, so that the boot image stays up until the
+ * first modeset.
+ */
+&pinctrl_top {
+	lcd_rst: lcd-rst-pins {
+		samsung,pins = "gpd4-1";
+		samsung,pin-function = <EXYNOS_PIN_FUNC_OUTPUT>;
+		samsung,pin-pud = <EXYNOS_PIN_PULL_NONE>;
+		samsung,pin-drv = <EXYNOS5433_PIN_DRV_FAST_SR1>;
+	};
+
+	lcd_buck_en: lcd-buck-en-pins {
+		samsung,pins = "gpd3-4";
+		samsung,pin-function = <EXYNOS_PIN_FUNC_OUTPUT>;
+		samsung,pin-pud = <EXYNOS_PIN_PULL_NONE>;
+		samsung,pin-drv = <EXYNOS5433_PIN_DRV_FAST_SR1>;
+	};
+};

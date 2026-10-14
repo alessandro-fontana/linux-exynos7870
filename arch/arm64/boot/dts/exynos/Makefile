@@ -22,3 +22,5 @@ dtb-$(CONFIG_ARCH_EXYNOS) += \
 	exynos990-x1slte.dtb		\
 	exynosautov9-sadk.dtb		\
 	exynosautov920-sadk.dtb
+dtb-$(CONFIG_ARCH_EXYNOS) += exynos7870-gtaxlwifi.dtb
+dtb-$(CONFIG_ARCH_EXYNOS) += exynos7870-gtaxlwifi-decon.dtb
