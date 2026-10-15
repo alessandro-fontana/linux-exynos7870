@@ -239,7 +239,8 @@ static void csis_buffer_done(struct csis *csis, struct csis_buffer *buf,
 			     enum vb2_buffer_state state)
 {
 	buf->vb.vb2_buf.timestamp = ktime_get_ns();
-	buf->vb.sequence = csis->sequence;
+	/* The frame that ends here is the last one started, numbered from 0. */
+	buf->vb.sequence = csis->sequence - 1;
 	buf->vb.field = V4L2_FIELD_NONE;
 	vb2_buffer_done(&buf->vb.vb2_buf, state);
 }
@@ -273,12 +274,12 @@ static irqreturn_t csis_irq(int irq, void *data)
 			.type = V4L2_EVENT_FRAME_SYNC,
 		};
 
-		csis->sequence++;
 		/*
-		 * The sequence the buffer of this frame will carry: the
-		 * sensor controls are applied at frame boundaries against it.
+		 * The sequence the buffer of this frame will carry, from 0 as
+		 * V4L2 wants: the sensor controls are applied at frame
+		 * boundaries against it.
 		 */
-		ev.u.frame_sync.frame_sequence = csis->sequence;
+		ev.u.frame_sync.frame_sequence = csis->sequence++;
 		v4l2_event_queue(&csis->vdev, &ev);
 	}
 
