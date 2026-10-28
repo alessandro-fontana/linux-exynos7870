@@ -260,6 +260,8 @@ static void mmc_select_card_type(struct mmc_card *card)
 	    card->ext_csd.strobe_support &&
 	    (avail_type & EXT_CSD_CARD_TYPE_HS400))
 		avail_type |= EXT_CSD_CARD_TYPE_HS400ES;
+	else if (caps2 & MMC_CAP2_HS400_ES_ONLY)
+		avail_type &= ~EXT_CSD_CARD_TYPE_HS400;
 
 	card->ext_csd.hs_max_dtr = hs_max_dtr;
 	card->ext_csd.hs200_max_dtr = hs200_max_dtr;
