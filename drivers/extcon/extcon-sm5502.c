@@ -768,8 +768,10 @@ static void sm5502_muic_detect_cable_wq(struct work_struct *work)
 	 * recorded as a plain SDP one.
 	 *
 	 * Reset the chip so it measures again, now that the host has had time
-	 * to enumerate, and put the configuration back afterwards: the reset
-	 * clears the interrupt masks along with everything else.
+	 * to enumerate. sm5502_init_dev_type() starts with the reset and then
+	 * puts the configuration back; a second reset just before it would
+	 * still be in progress when CONTROL is written, and the write that
+	 * unmasks the interrupt output would be lost.
 	 */
 	/*
 	 * The reset opens the USB switch for a moment and every USB session
@@ -788,7 +790,6 @@ static void sm5502_muic_detect_cable_wq(struct work_struct *work)
 		 * the USB switch in the middle of it.
 		 */
 		disable_irq(info->irq);
-		regmap_write(info->regmap, SM5502_REG_RESET, SM5502_REG_RESET_MASK);
 		sm5502_init_dev_type(info);
 
 		/*
