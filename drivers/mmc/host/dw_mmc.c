@@ -1600,6 +1600,16 @@ static int dw_mci_prepare_hs400_tuning(struct mmc_host *mmc,
 	return 0;
 }
 
+static void dw_mci_hs400_enhanced_strobe(struct mmc_host *mmc,
+					 struct mmc_ios *ios)
+{
+	struct dw_mci *host = mmc_priv(mmc);
+	const struct dw_mci_drv_data *drv_data = host->drv_data;
+
+	if (drv_data && drv_data->hs400_enhanced_strobe)
+		drv_data->hs400_enhanced_strobe(host, ios);
+}
+
 static bool dw_mci_reset(struct dw_mci *host)
 {
 	u32 flags = SDMMC_CTRL_RESET | SDMMC_CTRL_FIFO_RESET;
@@ -1681,6 +1691,7 @@ static const struct mmc_host_ops dw_mci_ops = {
 	.card_busy		= dw_mci_card_busy,
 	.start_signal_voltage_switch = dw_mci_switch_voltage,
 	.prepare_hs400_tuning	= dw_mci_prepare_hs400_tuning,
+	.hs400_enhanced_strobe	= dw_mci_hs400_enhanced_strobe,
 };
 
 #ifdef CONFIG_FAULT_INJECTION

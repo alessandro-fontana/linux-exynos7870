@@ -516,6 +516,7 @@ extern int dw_mci_runtime_resume(struct device *device);
  * @set_ios: handle bus specific extensions.
  * @parse_dt: parse implementation specific device tree properties.
  * @execute_tuning: implementation specific tuning procedure.
+ * @hs400_enhanced_strobe: enable or disable HS400 enhanced strobe.
  * @set_data_timeout: implementation specific timeout.
  * @get_drto_clks: implementation specific cycle count for data read timeout.
  * @hw_reset: implementation specific HW reset.
@@ -534,6 +535,8 @@ struct dw_mci_drv_data {
 	int		(*execute_tuning)(struct dw_mci *host, u32 opcode);
 	int		(*prepare_hs400_tuning)(struct dw_mci *host,
 						struct mmc_ios *ios);
+	void		(*hs400_enhanced_strobe)(struct dw_mci *host,
+						 struct mmc_ios *ios);
 	int		(*switch_voltage)(struct dw_mci *host,
 					  struct mmc_ios *ios);
 	void		(*set_data_timeout)(struct dw_mci *host,
