@@ -684,6 +684,54 @@ static int sm5504_parse_irq(struct sm5502_muic_info *info, int irq_type)
 	return 0;
 }
 
+/* Write the bring-up configuration, with or without resetting the chip first. */
+static void sm5502_muic_write_reg_data(struct sm5502_muic_info *info,
+				       bool reset)
+{
+	int i;
+
+	for (i = 0; i < info->type->num_reg_data; i++) {
+		unsigned int val = 0;
+
+		if (!reset && info->type->reg_data[i].reg == SM5502_REG_RESET)
+			continue;
+
+		if (!info->type->reg_data[i].invert)
+			val |= ~info->type->reg_data[i].val;
+		else
+			val = info->type->reg_data[i].val;
+		regmap_write(info->regmap, info->type->reg_data[i].reg, val);
+	}
+}
+
+/*
+ * The chip can reset on its own while running, and comes back with its
+ * interrupt output masked in CONTROL: from then on attach and detach go
+ * unreported. The configuration always clears that mask, so finding it
+ * set after an interrupt means the configuration is gone. Put it back,
+ * and ask the chip what is plugged in now, since whatever happened while
+ * it was masked was never reported.
+ */
+static int sm5502_muic_irq_post(void *irq_drv_data)
+{
+	struct sm5502_muic_info *info = irq_drv_data;
+	unsigned int ctrl;
+	int ret;
+
+	ret = regmap_read(info->regmap, SM5502_REG_CONTROL, &ctrl);
+	if (ret || !(ctrl & SM5502_REG_CONTROL_MASK_INT_MASK))
+		return ret;
+
+	dev_warn(info->dev, "chip was reset, restoring its configuration\n");
+	sm5502_muic_write_reg_data(info, false);
+
+	info->irq_attach = true;
+	info->irq_detach = true;
+	schedule_work(&info->irq_work);
+
+	return 0;
+}
+
 static irqreturn_t sm5502_muic_irq_handler(int irq, void *data)
 {
 	struct sm5502_muic_info *info = data;
@@ -733,6 +781,13 @@ static void sm5502_muic_detect_cable_wq(struct work_struct *work)
 		unsigned int type, prev = 0;
 		int i;
 
+		/*
+		 * Keep the interrupt off until the chip has measured: the
+		 * reset would otherwise look like one the chip did on its own,
+		 * and reading the cable before the measurement is done opens
+		 * the USB switch in the middle of it.
+		 */
+		disable_irq(info->irq);
 		regmap_write(info->regmap, SM5502_REG_RESET, SM5502_REG_RESET_MASK);
 		sm5502_init_dev_type(info);
 
@@ -755,6 +810,7 @@ static void sm5502_muic_detect_cable_wq(struct work_struct *work)
 		}
 		dev_dbg(info->dev, "re-detection: DEV_TYPE1 0x%02x after %d ms\n",
 			prev, (i + 1) * 50);
+		enable_irq(info->irq);
 	}
 
 	/* Notify the state of connector cable or not  */
@@ -766,7 +822,7 @@ static void sm5502_muic_detect_cable_wq(struct work_struct *work)
 static void sm5502_init_dev_type(struct sm5502_muic_info *info)
 {
 	unsigned int reg_data, vendor_id, version_id;
-	int i, ret;
+	int ret;
 
 	/* To test I2C, Print version_id and vendor_id of SM5502 */
 	ret = regmap_read(info->regmap, SM5502_REG_DEVICE_ID, &reg_data);
@@ -784,22 +840,14 @@ static void sm5502_init_dev_type(struct sm5502_muic_info *info)
 	dev_info(info->dev, "Device type: version: 0x%x, vendor: 0x%x\n",
 			    version_id, vendor_id);
 
-	/* Initiazle the register of SM5502 device to bring-up */
-	for (i = 0; i < info->type->num_reg_data; i++) {
-		unsigned int val = 0;
-
-		if (!info->type->reg_data[i].invert)
-			val |= ~info->type->reg_data[i].val;
-		else
-			val = info->type->reg_data[i].val;
-		regmap_write(info->regmap, info->type->reg_data[i].reg, val);
-	}
+	sm5502_muic_write_reg_data(info, true);
 }
 
 static int sm5022_muic_i2c_probe(struct i2c_client *i2c)
 {
 	struct device_node *np = i2c->dev.of_node;
 	struct sm5502_muic_info *info;
+	struct regmap_irq_chip *irq_chip;
 	int i, ret, irq_flags;
 
 	if (!np)
@@ -840,8 +888,15 @@ static int sm5022_muic_i2c_probe(struct i2c_client *i2c)
 	 * sees it.
 	 */
 	irq_flags = IRQF_ONESHOT | IRQF_SHARED;
+	irq_chip = devm_kmemdup(info->dev, info->type->irq_chip,
+				sizeof(*irq_chip), GFP_KERNEL);
+	if (!irq_chip)
+		return -ENOMEM;
+	irq_chip->handle_post_irq = sm5502_muic_irq_post;
+	irq_chip->irq_drv_data = info;
+
 	ret = devm_regmap_add_irq_chip(info->dev, info->regmap, info->irq,
-				       irq_flags, 0, info->type->irq_chip,
+				       irq_flags, 0, irq_chip,
 				       &info->irq_data);
 	if (ret != 0) {
 		dev_err(info->dev, "failed to request IRQ %d: %d\n",
@@ -896,8 +951,13 @@ static int sm5022_muic_i2c_probe(struct i2c_client *i2c)
 	queue_delayed_work(system_power_efficient_wq, &info->wq_detcable,
 			msecs_to_jiffies(DELAY_MS_DEFAULT));
 
-	/* Initialize SM5502 device and print vendor id and version id */
+	/*
+	 * Initialize SM5502 device and print vendor id and version id. The
+	 * reset this starts with is not one to recover from.
+	 */
+	disable_irq(info->irq);
 	sm5502_init_dev_type(info);
+	enable_irq(info->irq);
 
 	return 0;
 }
