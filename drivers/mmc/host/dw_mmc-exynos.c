@@ -293,9 +293,11 @@ static int dw_mci_exynos_resume_noirq(struct device *dev)
 	return 0;
 }
 
-static void dw_mci_exynos_config_hs400(struct dw_mci *host, u32 timing)
+static void dw_mci_exynos_config_hs400(struct dw_mci *host,
+				       struct mmc_ios *ios)
 {
 	struct dw_mci_exynos_priv_data *priv = host->priv;
+	u32 timing = ios->timing;
 	u32 dqs, strobe;
 
 	/*
@@ -326,6 +328,9 @@ static void dw_mci_exynos_config_hs400(struct dw_mci *host, u32 timing)
 			dqs |= TXDT_CRC_TIMER_SET(priv->txdt_crc_fastlimit,
 						  priv->txdt_crc_initval);
 		}
+		/* with enhanced strobe, responses are latched on the strobe too */
+		if (ios->enhanced_strobe)
+			dqs |= RESP_RCLK_MODE;
 	} else if (timing == MMC_TIMING_UHS_SDR104) {
 		dqs &= 0xffffff00;
 	} else {
@@ -404,10 +409,16 @@ static void dw_mci_exynos_set_ios(struct dw_mci *host, struct mmc_ios *ios)
 	dw_mci_exynos_set_clksel_timing(host, clksel);
 
 	/* Configure setting for HS400 */
-	dw_mci_exynos_config_hs400(host, timing);
+	dw_mci_exynos_config_hs400(host, ios);
 
 	/* Configure clock rate */
 	dw_mci_exynos_adjust_clock(host, wanted);
+}
+
+static void dw_mci_exynos_hs400_enhanced_strobe(struct dw_mci *host,
+						struct mmc_ios *ios)
+{
+	dw_mci_exynos_config_hs400(host, ios);
 }
 
 static int dw_mci_exynos_parse_dt(struct dw_mci *host)
@@ -682,6 +693,7 @@ static const struct dw_mci_drv_data exynos_drv_data = {
 	.parse_dt		= dw_mci_exynos_parse_dt,
 	.execute_tuning		= dw_mci_exynos_execute_tuning,
 	.prepare_hs400_tuning	= dw_mci_exynos_prepare_hs400_tuning,
+	.hs400_enhanced_strobe	= dw_mci_exynos_hs400_enhanced_strobe,
 };
 
 static const struct dw_mci_drv_data artpec_drv_data = {
