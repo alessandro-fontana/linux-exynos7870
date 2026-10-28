@@ -833,8 +833,13 @@ static int sm5022_muic_i2c_probe(struct i2c_client *i2c)
 		return ret;
 	}
 
-	/* Support irq domain for SM5502 MUIC device */
-	irq_flags = IRQF_TRIGGER_FALLING | IRQF_ONESHOT | IRQF_SHARED;
+	/*
+	 * Support irq domain for SM5502 MUIC device. The trigger comes from
+	 * the firmware: an event that arrives while the handler is reading
+	 * the status registers keeps the line low, and only a level trigger
+	 * sees it.
+	 */
+	irq_flags = IRQF_ONESHOT | IRQF_SHARED;
 	ret = devm_regmap_add_irq_chip(info->dev, info->regmap, info->irq,
 				       irq_flags, 0, info->type->irq_chip,
 				       &info->irq_data);
