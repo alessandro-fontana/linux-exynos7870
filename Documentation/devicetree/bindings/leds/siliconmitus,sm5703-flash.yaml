@@ -1,0 +1,63 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/leds/siliconmitus,sm5703-flash.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: Silicon Mitus SM5703 flash LED driver
+
+maintainers:
+  - Alessandro Fontana <alessandro.fontana@pm.me>
+
+description: |
+  The SM5703 drives one flash LED from the output of its boost converter,
+  in torch (movie) or flash mode.  It is a function of the SM5703 PMIC and
+  is described as a child node of it, see
+  ../mfd/siliconmitus,sm5703.yaml.
+
+properties:
+  compatible:
+    const: siliconmitus,sm5703-flash
+
+  led:
+    type: object
+    $ref: common.yaml#
+    unevaluatedProperties: false
+
+    properties:
+      led-max-microamp:
+        minimum: 10000
+        maximum: 320000
+        default: 150000
+
+      flash-max-microamp:
+        minimum: 300000
+        maximum: 1500000
+        default: 1200000
+
+      flash-max-timeout-us:
+        minimum: 100000
+        maximum: 1600000
+        default: 1600000
+
+required:
+  - compatible
+  - led
+
+additionalProperties: false
+
+examples:
+  - |
+    #include <dt-bindings/leds/common.h>
+
+    flash {
+        compatible = "siliconmitus,sm5703-flash";
+
+        led {
+            function = LED_FUNCTION_FLASH;
+            color = <LED_COLOR_ID_WHITE>;
+            led-max-microamp = <150000>;
+            flash-max-microamp = <1200000>;
+            flash-max-timeout-us = <1600000>;
+        };
+    };
