@@ -476,6 +476,8 @@ static int dw_mci_exynos_parse_dt(struct dw_mci *host)
 			     &priv->txdt_crc_fastlimit);
 	of_property_read_u32(np, "samsung,dw-mshc-txdt-crc-timer-initval",
 			     &priv->txdt_crc_initval);
+	if (of_property_read_bool(np, "samsung,hs400-enhanced-strobe-only"))
+		host->mmc->caps2 |= MMC_CAP2_HS400_ES_ONLY;
 	host->priv = priv;
 	return 0;
 }
