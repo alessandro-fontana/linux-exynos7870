@@ -113,6 +113,13 @@ properties:
       RCLK (Data strobe) delay to control HS400 mode (Latency value for delay
       line in Read path). If missing, default from hardware is used.
 
+  samsung,hs400-enhanced-strobe-only:
+    type: boolean
+    description:
+      Use HS400 only with enhanced strobe, and keep cards that do not support
+      it in HS200, for boards where samsung,read-strobe-delay is known to work
+      only with enhanced strobe.
+
 required:
   - compatible
   - reg
