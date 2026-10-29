@@ -185,12 +185,26 @@ EXPORT_SYMBOL_GPL(unshare_fs_struct);
  */
 static inline void validate_fs_switch(struct fs_struct *old_fs)
 {
+	bool shared;
+
 	might_sleep();
 
 	if (likely(current->pid != 1))
 		return;
 	/* @old_fs may be dangling but for comparison it's fine */
 	if (old_fs != userspace_init_fs)
+		return;
+	/*
+	 * Other threads of PID 1, created with CLONE_FS before the switch,
+	 * may still use it: Android's init starts its property service
+	 * threads before it unshares its mount namespace. The state is not
+	 * stale for them, so leave it alone. The global pointer holds one
+	 * reference of its own.
+	 */
+	read_seqlock_excl(&old_fs->seq);
+	shared = old_fs->users > 1;
+	read_sequnlock_excl(&old_fs->seq);
+	if (shared)
 		return;
 	pr_warn("VFS: Pid 1 stopped sharing filesystem state\n");
 	set_fs_root(userspace_init_fs, &init_fs.root);
