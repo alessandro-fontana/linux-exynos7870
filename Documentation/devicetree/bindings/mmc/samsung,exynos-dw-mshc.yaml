@@ -113,6 +113,20 @@ properties:
       RCLK (Data strobe) delay to control HS400 mode (Latency value for delay
       line in Read path). If missing, default from hardware is used.
 
+  samsung,dw-mshc-txdt-crc-timer-fastlimit:
+    $ref: /schemas/types.yaml#/definitions/uint32
+    maximum: 0xff
+    description:
+      Fast limit of the write CRC status timer, programmed in HS400 mode.
+      If neither this nor samsung,dw-mshc-txdt-crc-timer-initval is given,
+      the timer is left as the bootloader set it.
+
+  samsung,dw-mshc-txdt-crc-timer-initval:
+    $ref: /schemas/types.yaml#/definitions/uint32
+    maximum: 0xff
+    description:
+      Initial value of the write CRC status timer, programmed in HS400 mode.
+
   samsung,hs400-enhanced-strobe-only:
     type: boolean
     description:
