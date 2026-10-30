@@ -19,12 +19,26 @@ description:
 
 allOf:
   - $ref: panel-common-dual.yaml#
+  - if:
+      properties:
+        compatible:
+          contains:
+            enum:
+              - aoly,sl101pm1794fog-v15
+              - startek,kd070fhfid078
+    then:
+      required:
+        - backlight
 
 properties:
   compatible:
     items:
       - enum:
           - aoly,sl101pm1794fog-v15
+          # The three panels of the Samsung Galaxy Tab A 10.1 (2016)
+          - boe,hx8279d-gtaxl
+          - boe,hx8279d-gtaxl-v2
+          - chunghwa,hx8279d-gtaxl
           - startek,kd070fhfid078
       - const: himax,hx8279
 
@@ -40,7 +54,6 @@ properties:
 required:
   - compatible
   - reg
-  - backlight
   - reset-gpios
   - iovcc-supply
   - vdd-supply
