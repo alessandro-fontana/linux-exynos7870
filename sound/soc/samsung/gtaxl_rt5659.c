@@ -91,7 +91,19 @@ static int gtaxl_aif1_hw_params(struct snd_pcm_substream *substream,
 		return -EINVAL;
 	}
 
-	/* CPU: CDCLK out at rfs, root clock from CMU, BCLK divider */
+	/*
+	 * CPU: root clock from the MI2S divider of the AUD PLL.  The
+	 * default source in provider mode is the APB clock, which does
+	 * not divide to the audio rates (48.8 kHz instead of 48 kHz).
+	 */
+	ret = snd_soc_dai_set_sysclk(cpu_dai, SAMSUNG_I2S_RCLKSRC_1, 0,
+				     SND_SOC_CLOCK_IN);
+	if (ret < 0) {
+		dev_err(rtd->card->dev, "failed to set RCLK source: %d\n", ret);
+		return ret;
+	}
+
+	/* CPU: CDCLK out at rfs, BCLK divider */
 	ret = snd_soc_dai_set_sysclk(cpu_dai, SAMSUNG_I2S_CDCLK,
 				     rfs, SND_SOC_CLOCK_OUT);
 	if (ret < 0) {
