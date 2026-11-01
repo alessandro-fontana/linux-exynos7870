@@ -1125,9 +1125,10 @@
 		};
 
 		/*
-		 * I2S0 has the register layout of the i2sv5_i2s1 variant. Both
-		 * opclks point to the same gate, so the RCLKSRC mux does not
-		 * matter. DMA channels from the vendor kernel.
+		 * I2S0 has the register layout of the i2sv5_i2s1 variant. The
+		 * RCLKSRC mux selects the APB clock (0) or the MI2S clock (1);
+		 * only the latter divides down to 48 kHz exactly. DMA channels
+		 * from the vendor kernel.
 		 */
 		i2s0: i2s@148a0000 {
 			compatible = "samsung,exynos7-i2s1";
@@ -1138,7 +1139,7 @@
 			dma-names = "tx", "rx";
 
 			clocks = <&cmu_dispaud CLK_GOUT_DISPAUD_APB_AUD>,
-				 <&cmu_dispaud CLK_GOUT_DISPAUD_MI2S_AUD_I2SCODCLKI>,
+				 <&cmu_dispaud CLK_GOUT_DISPAUD_APB_AUD>,
 				 <&cmu_dispaud CLK_GOUT_DISPAUD_MI2S_AUD_I2SCODCLKI>;
 			clock-names = "iis", "i2s_opclk0", "i2s_opclk1";
 
