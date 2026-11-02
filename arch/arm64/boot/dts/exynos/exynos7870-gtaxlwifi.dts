@@ -943,24 +943,27 @@
 	 * cap-mmc-highspeed is needed to leave the 25 MHz legacy mode; DDR52
 	 * also relies on the driver caps of controller 0, which the mmc0 alias
 	 * selects. HS200 runs the card at 199.875 MHz (CIU at bus_pll / 2,
-	 * ciu-div 3); the sample phase comes from tuning.
+	 * ciu-div 3) with the vendor hs200-timing <3 0 3 0>, drive phase 3;
+	 * the sample phase comes from tuning.
 	 */
 	cap-mmc-highspeed;
 	mmc-hs200-1_8v;
+	samsung,dw-mshc-hs200-timing = <0 3>;
 
 	/*
-	 * HS400 with the vendor kernel's values. The vendor ddr200-timing
-	 * <1 0 4 0> (ciu-div, fine drive, drive, sample) becomes <0 4> here,
-	 * with the fixed HS400 divider. The read strobe delay (RD_DQS_DELAY of
-	 * HS400_DLINE_CTRL) and the write CRC status timer are the vendor
-	 * DDR200 values. Enhanced strobe, as in the vendor kernel, and only
-	 * that: plain HS400 with these values fails on some of the cards
-	 * fitted to this board, which then stay in HS200.
+	 * HS400 as the vendor kernel runs it on this board: in the ultra low
+	 * power mode (enable-ulp-mode there), with its ddr200-ulp-timing
+	 * <3 0 3 0>, that is ciu-div 3 and drive phase 3. The read strobe
+	 * delay and the write CRC status timer are the vendor DDR200 values.
+	 * Enhanced strobe, as in the vendor kernel, and only that: plain HS400
+	 * fails on some of the cards fitted to this board, which then stay in
+	 * HS200.
 	 */
 	mmc-hs400-1_8v;
 	mmc-hs400-enhanced-strobe;
 	samsung,hs400-enhanced-strobe-only;
-	samsung,dw-mshc-hs400-timing = <0 4>;
+	samsung,hs400-ulp-mode;
+	samsung,dw-mshc-hs400-timing = <0 3>;
 	samsung,read-strobe-delay = <0x75>;
 	samsung,dw-mshc-txdt-crc-timer-fastlimit = <0x34>;
 	samsung,dw-mshc-txdt-crc-timer-initval = <0x38>;
