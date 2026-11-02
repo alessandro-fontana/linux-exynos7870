@@ -73,6 +73,21 @@ properties:
       phase shift value in receive mode for double data rate mode operation.
       See also samsung,dw-mshc-hs400-timing property.
 
+  samsung,dw-mshc-hs200-timing:
+    $ref: /schemas/types.yaml#/definitions/uint32-array
+    items:
+      - description: CIU clock phase shift value for tx mode
+        minimum: 0
+        maximum: 7
+      - description: CIU clock phase shift value for rx mode
+        minimum: 0
+        maximum: 7
+    description:
+      The value of CIU TX and RX clock phase shift value for HS200 mode
+      operation, with the samsung,dw-mshc-ciu-div divider. The RX phase is
+      then found by tuning. If missing, values from
+      samsung,dw-mshc-sdr-timing property are used.
+
   samsung,dw-mshc-hs400-timing:
     $ref: /schemas/types.yaml#/definitions/uint32-array
     items:
