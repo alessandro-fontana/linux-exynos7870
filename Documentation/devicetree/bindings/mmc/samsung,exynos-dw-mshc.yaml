@@ -149,6 +149,15 @@ properties:
       it in HS200, for boards where samsung,read-strobe-delay is known to work
       only with enhanced strobe.
 
+  samsung,hs400-ulp-mode:
+    type: boolean
+    description:
+      Run HS400 in the ultra low power mode of the controller, as the vendor
+      kernels of some Exynos 7870 boards do. The CIU clock keeps the
+      samsung,dw-mshc-ciu-div divider of the other modes instead of being
+      doubled, samsung,dw-mshc-hs400-timing applies with that divider, and
+      the read strobe delay line is programmed as a whole.
+
 required:
   - compatible
   - reg
