@@ -39,6 +39,7 @@ struct dw_mci_exynos_priv_data {
 	u8				ciu_div;
 	u32				sdr_timing;
 	u32				ddr_timing;
+	u32				hs200_timing;	/* 0: use sdr_timing */
 	u32				hs400_timing;
 	u32				tuned_sample;
 	u32				cur_speed;
@@ -386,6 +387,13 @@ static void dw_mci_exynos_set_ios(struct dw_mci *host, struct mmc_ios *ios)
 				priv->hs400_timing, priv->tuned_sample);
 		wanted <<= 1;
 		break;
+	case MMC_TIMING_MMC_HS200:
+		if (priv->hs200_timing)
+			clksel = SDMMC_CLKSEL_UP_SAMPLE(priv->hs200_timing,
+							priv->tuned_sample);
+		else
+			clksel = priv->sdr_timing;
+		break;
 	case MMC_TIMING_MMC_DDR52:
 		clksel = priv->ddr_timing;
 		/* Should be double rate for DDR mode */
@@ -471,6 +479,10 @@ static int dw_mci_exynos_parse_dt(struct dw_mci *host)
 
 	priv->hs400_timing = SDMMC_CLKSEL_TIMING(timing[0], timing[1],
 						HS400_FIXED_CIU_CLK_DIV);
+
+	if (!of_property_read_u32_array(np, "samsung,dw-mshc-hs200-timing",
+					timing, 2))
+		priv->hs200_timing = SDMMC_CLKSEL_TIMING(timing[0], timing[1], div);
 
 	of_property_read_u32(np, "samsung,dw-mshc-txdt-crc-timer-fastlimit",
 			     &priv->txdt_crc_fastlimit);
