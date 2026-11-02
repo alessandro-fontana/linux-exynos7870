@@ -29,6 +29,8 @@
 					 SDMMC_CLKSEL_CCLK_DIVIDER(z))
 #define SDMMC_CLKSEL_TIMING_MASK	SDMMC_CLKSEL_TIMING(0x7, 0x7, 0x7)
 #define SDMMC_CLKSEL_WAKEUP_INT		BIT(11)
+/* HS400 ultra low power mode, as set by the vendor kernels */
+#define SDMMC_CLKSEL_ULP		(BIT(30) | BIT(19))
 
 /* RCLK_EN register defines */
 #define DATA_STROBE_EN			BIT(0)
@@ -42,6 +44,7 @@
 /* DLINE_CTRL register defines */
 #define DQS_CTRL_RD_DELAY(x, y)		(((x) & ~0x3FF) | ((y) & 0x3FF))
 #define DQS_CTRL_GET_RD_DELAY(x)	((x) & 0x3FF)
+#define DQS_CTRL_FIFO_CLK_DELAY(x)	(((x) & 0x3) << 16)
 
 /* Protector Register */
 #define SDMMC_EMMCP_BASE	0x1000

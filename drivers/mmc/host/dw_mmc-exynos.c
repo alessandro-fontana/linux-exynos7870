@@ -41,6 +41,7 @@ struct dw_mci_exynos_priv_data {
 	u32				ddr_timing;
 	u32				hs200_timing;	/* 0: use sdr_timing */
 	u32				hs400_timing;
+	bool				hs400_ulp;
 	u32				tuned_sample;
 	u32				cur_speed;
 	u32				dqs_delay;
@@ -175,7 +176,11 @@ static void dw_mci_exynos_set_clksel_timing(struct dw_mci *host, u32 timing)
 	else
 		clksel = mci_readl(host, CLKSEL);
 
-	clksel = (clksel & ~SDMMC_CLKSEL_TIMING_MASK) | timing;
+	clksel &= ~SDMMC_CLKSEL_TIMING_MASK;
+	/* the ultra low power bits belong to the HS400 timing only */
+	if (priv->hs400_ulp)
+		clksel &= ~SDMMC_CLKSEL_ULP;
+	clksel |= timing;
 
 	if (priv->ctrl_type == DW_MCI_TYPE_EXYNOS7 ||
 		priv->ctrl_type == DW_MCI_TYPE_EXYNOS7_SMU ||
@@ -318,7 +323,16 @@ static void dw_mci_exynos_config_hs400(struct dw_mci *host,
 
 	if (timing == MMC_TIMING_MMC_HS400) {
 		dqs |= DATA_STROBE_EN;
-		strobe = DQS_CTRL_RD_DELAY(strobe, priv->dqs_delay);
+		/*
+		 * In the ultra low power mode the vendor kernel writes the whole
+		 * delay line: FIFO clock delay 2, the read delay, and no write
+		 * delay, whatever the bootloader left.
+		 */
+		if (priv->hs400_ulp)
+			strobe = DQS_CTRL_FIFO_CLK_DELAY(2) |
+				 DQS_CTRL_RD_DELAY(0, priv->dqs_delay);
+		else
+			strobe = DQS_CTRL_RD_DELAY(strobe, priv->dqs_delay);
 		/*
 		 * The bootloader leaves the write CRC status timer tuned for
 		 * the speeds it runs at; the vendor kernel sets it for DDR200
@@ -385,7 +399,12 @@ static void dw_mci_exynos_set_ios(struct dw_mci *host, struct mmc_ios *ios)
 		/* Update tuned sample timing */
 		clksel = SDMMC_CLKSEL_UP_SAMPLE(
 				priv->hs400_timing, priv->tuned_sample);
-		wanted <<= 1;
+		/*
+		 * Double data rate from the CIU clock, unless the controller
+		 * runs HS400 in its ultra low power mode at the HS200 rate.
+		 */
+		if (!priv->hs400_ulp)
+			wanted <<= 1;
 		break;
 	case MMC_TIMING_MMC_HS200:
 		if (priv->hs200_timing)
@@ -477,8 +496,17 @@ static int dw_mci_exynos_parse_dt(struct dw_mci *host)
 		dev_dbg(host->dev,
 			"read-strobe-delay is not found, assuming usage of default value\n");
 
-	priv->hs400_timing = SDMMC_CLKSEL_TIMING(timing[0], timing[1],
-						HS400_FIXED_CIU_CLK_DIV);
+	/*
+	 * In the ultra low power mode HS400 keeps the CIU divider of the
+	 * other modes, and the CIU clock is not doubled.
+	 */
+	priv->hs400_ulp = of_property_read_bool(np, "samsung,hs400-ulp-mode");
+	if (priv->hs400_ulp)
+		priv->hs400_timing = SDMMC_CLKSEL_TIMING(timing[0], timing[1], div) |
+				     SDMMC_CLKSEL_ULP;
+	else
+		priv->hs400_timing = SDMMC_CLKSEL_TIMING(timing[0], timing[1],
+							HS400_FIXED_CIU_CLK_DIV);
 
 	if (!of_property_read_u32_array(np, "samsung,dw-mshc-hs200-timing",
 					timing, 2))
@@ -638,7 +666,8 @@ static int dw_mci_exynos_prepare_hs400_tuning(struct dw_mci *host,
 	struct dw_mci_exynos_priv_data *priv = host->priv;
 
 	dw_mci_exynos_set_clksel_timing(host, priv->hs400_timing);
-	dw_mci_exynos_adjust_clock(host, (ios->clock) << 1);
+	dw_mci_exynos_adjust_clock(host, priv->hs400_ulp ? ios->clock :
+				   (ios->clock) << 1);
 
 	return 0;
 }
