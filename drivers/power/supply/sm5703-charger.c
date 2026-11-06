@@ -410,6 +410,18 @@ static int sm5703_charger_configure(struct sm5703_charger *chg)
 	if (ret)
 		return ret;
 
+	/*
+	 * Input current regulation: when a USB port or adapter cannot supply
+	 * enough current to meet the current limit, VBUS will sag.  Hold the
+	 * input current down rather than let the supply collapse.  The input
+	 * current limits rely on this, so do not depend on the bootloader
+	 * having enabled it.
+	 */
+	ret = regmap_set_bits(chg->regmap, SM5703_REG_CHGCNTL5,
+			      SM5703_CHGCNTL5_AICLEN);
+	if (ret)
+		return ret;
+
 	ret = regmap_update_bits(chg->regmap, SM5703_REG_CHGCNTL6,
 				 SM5703_CHGCNTL6_FREQSEL,
 				 FIELD_PREP(SM5703_CHGCNTL6_FREQSEL,
