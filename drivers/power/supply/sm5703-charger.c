@@ -410,6 +410,17 @@ static int sm5703_charger_configure(struct sm5703_charger *chg)
 	if (ret)
 		return ret;
 
+	/*
+	 * Input current regulation: when the adapter cannot supply the limit
+	 * and VBUS sags, hold the input current down rather than let the
+	 * adapter collapse.  It is normally on out of reset, but the input
+	 * current limits above rely on it, so do not leave it to chance.
+	 */
+	ret = regmap_set_bits(chg->regmap, SM5703_REG_CHGCNTL5,
+			      SM5703_CHGCNTL5_AICLEN);
+	if (ret)
+		return ret;
+
 	ret = regmap_update_bits(chg->regmap, SM5703_REG_CHGCNTL6,
 				 SM5703_CHGCNTL6_FREQSEL,
 				 FIELD_PREP(SM5703_CHGCNTL6_FREQSEL,
