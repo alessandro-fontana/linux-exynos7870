@@ -45,12 +45,16 @@
 
 /*
  * The charger cannot tell a wall adapter from a host port on its own:
- * that is the MUIC's job.  Until one tells us otherwise, assume the
- * least a USB source is required to provide.
+ * that is the MUIC's job.  A port it identifies gets the limit for what
+ * that port can supply.  A source it cannot identify is most likely a
+ * wall adapter on a charge-only cable.  The SDP minimum is not enough to
+ * run most devices with the screen on, and AICL holds the current down
+ * if the adapter voltage drops, so allow 1 A as a fairly safe default.
  */
 #define SM5703_INPUT_CURRENT_SDP	500000
 #define SM5703_INPUT_CURRENT_CDP	1500000
 #define SM5703_INPUT_CURRENT_ACA	1500000
+#define SM5703_INPUT_CURRENT_UNKNOWN	1000000
 
 /*
  * Charging stops when the cell leaves its operating range and resumes
@@ -135,9 +139,7 @@ static int sm5703_charger_get_field(struct sm5703_charger *chg,
 /*
  * What the attached port is good for.  A dedicated charger gets whatever
  * the board allows; the various host ports get what they are allowed to
- * promise.  Anything unrecognised, or nothing attached at all, falls
- * back to the least a source can offer, as drawing more than a port
- * provides can make it cut the power.
+ * promise.  Anything unrecognised gets SM5703_INPUT_CURRENT_UNKNOWN.
  *
  * Without a MUIC there is nothing to ask, so the board limit is all
  * there is to go on.
@@ -180,8 +182,11 @@ static unsigned int sm5703_charger_wanted_current(struct sm5703_charger *chg)
 	case POWER_SUPPLY_USB_TYPE_ACA:
 		wanted = SM5703_INPUT_CURRENT_ACA;
 		break;
-	default:
+	case POWER_SUPPLY_USB_TYPE_SDP:
 		wanted = SM5703_INPUT_CURRENT_SDP;
+		break;
+	default:
+		wanted = SM5703_INPUT_CURRENT_UNKNOWN;
 		break;
 	}
 
@@ -407,6 +412,17 @@ static int sm5703_charger_configure(struct sm5703_charger *chg)
 	 */
 	ret = regmap_clear_bits(chg->regmap, SM5703_REG_CNTL,
 				SM5703_CNTL_AUTOSET);
+	if (ret)
+		return ret;
+
+	/*
+	 * Input current regulation: when the adapter cannot supply the limit
+	 * and VBUS sags, hold the input current down rather than let the
+	 * adapter collapse.  It is normally on out of reset, but the input
+	 * current limits above rely on it, so do not leave it to chance.
+	 */
+	ret = regmap_set_bits(chg->regmap, SM5703_REG_CHGCNTL5,
+			      SM5703_CHGCNTL5_AICLEN);
 	if (ret)
 		return ret;
 
