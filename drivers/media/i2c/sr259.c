@@ -43,8 +43,6 @@
 #define SR259_REG_ID			CCI_REG8(0x04)
 #define SR259_REG_REV			CCI_REG8(0x05)
 #define SR259_REG_HOLD			CCI_REG8(0x1f)
-#define SR259_REG_FLL_H			CCI_REG8(0x4e)
-#define SR259_REG_FLL_L			CCI_REG8(0x4f)
 
 /* page 0x20 */
 #define SR259_REG_EXPOSURE_H		CCI_REG8(0x22)
@@ -828,8 +826,14 @@ static int sr259_set_ctrl(struct v4l2_ctrl *ctrl)
 					       sensor->exposure->minimum, max,
 					       sensor->exposure->step,
 					       min_t(s64, sensor->exposure->default_value, max));
-		if (ret)
-			return ret;
+
+		/*
+		 * The sensor runs with a variable frame length: it stretches
+		 * the frame by itself when the exposure needs it, and the
+		 * frame length registers are not for changing while it
+		 * streams, the DMA gets more lines than a frame has.
+		 */
+		return ret;
 	}
 
 	if (!pm_runtime_get_if_in_use(sensor->dev))
@@ -849,12 +853,6 @@ static int sr259_set_ctrl(struct v4l2_ctrl *ctrl)
 		cci_write(sensor->regmap, SR259_REG_PAGE, SR259_PAGE_20, &ret);
 		cci_write(sensor->regmap, SR259_REG_AGAIN_MSB, code >> 1, &ret);
 		cci_write(sensor->regmap, SR259_REG_AGAIN_LSB, code & 1, &ret);
-		break;
-	case V4L2_CID_VBLANK:
-		cci_write(sensor->regmap, SR259_REG_FLL_H,
-			  (SR259_HEIGHT + ctrl->val) >> 8, &ret);
-		cci_write(sensor->regmap, SR259_REG_FLL_L,
-			  (SR259_HEIGHT + ctrl->val) & 0xff, &ret);
 		break;
 	default:
 		break;
