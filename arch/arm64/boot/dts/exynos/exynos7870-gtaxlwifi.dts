@@ -465,6 +465,13 @@
  * "dvfs_g3d"), at the ASV table 5 group 5 voltages fused in the unit
  * they were read from, plus the 20 mV margin of the vendor Mali driver,
  * rounded to the 6.25 mV PMIC step.
+ *
+ * BUCK2 also supplies MIF, INT and DISP, which the vendor kernel scales
+ * on the same regulator; here they have no DVFS and keep the clocks the
+ * bootloader set, MIF at 902 MHz. No OPP goes below their highest level
+ * on that unit, INT at 400 MHz plus 25 mV, so the memory controller and
+ * the bus are never undervolted while the GPU idles. The bootloader
+ * rewrites all of these with the values of the chip it runs on.
  */
 &gpu {
 	status = "okay";
@@ -477,27 +484,27 @@
 
 		opp-343000000 {
 			opp-hz = /bits/ 64 <343000000>;
-			opp-microvolt = <625000>;
+			opp-microvolt = <793750>;
 		};
 
 		opp-450000000 {
 			opp-hz = /bits/ 64 <450000000>;
-			opp-microvolt = <662500>;
+			opp-microvolt = <793750>;
 		};
 
 		opp-545000000 {
 			opp-hz = /bits/ 64 <545000000>;
-			opp-microvolt = <706250>;
+			opp-microvolt = <793750>;
 		};
 
 		opp-676000000 {
 			opp-hz = /bits/ 64 <676000000>;
-			opp-microvolt = <768750>;
+			opp-microvolt = <793750>;
 		};
 
 		opp-728000000 {
 			opp-hz = /bits/ 64 <728000000>;
-			opp-microvolt = <787500>;
+			opp-microvolt = <793750>;
 		};
 
 		opp-845000000 {
@@ -771,9 +778,10 @@
 
 			/*
 			 * BUCK2 (G3D) is declared for GPU DVFS: without
-			 * constraints, voltage changes are rejected. Range and
-			 * ramp from the vendor kernel; always on, as there,
-			 * because it supplies a SoC power domain.
+			 * constraints, voltage changes are rejected. It also
+			 * supplies MIF, INT and DISP (see the GPU OPPs). Range
+			 * and ramp from the vendor kernel; always on, as there,
+			 * because it supplies SoC power domains.
 			 */
 			buck2_reg: buck2 {
 				regulator-name = "vdd_g3d";
