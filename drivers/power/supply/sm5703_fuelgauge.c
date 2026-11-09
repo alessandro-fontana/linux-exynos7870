@@ -32,6 +32,7 @@
 #include <linux/property.h>
 #include <linux/regmap.h>
 #include <linux/thermal.h>
+#include <linux/workqueue.h>
 
 #define SM5703_FG_REG_DEVICE_ID		0x00
 #define SM5703_FG_REG_CNTL		0x01
@@ -149,6 +150,15 @@ struct sm5703_fg_params {
 	u32 tem_poff[4];	/* normal level/offset, low level/offset */
 };
 
+/*
+ * The gauge interrupts only at the alert level, not when the SOC changes.
+ * As the vendor battery driver does (polling_time, 30 s), report the
+ * battery every 30 s while the system runs, so that user space follows the
+ * level. The work is freezable and its timer deferrable: it does not run
+ * in suspend and does not wake an idle CPU.
+ */
+#define SM5703_FG_POLL_INTERVAL	(30 * HZ)
+
 struct sm5703_fg {
 	struct device *dev;
 	struct regmap *regmap;
@@ -157,6 +167,7 @@ struct sm5703_fg {
 	struct thermal_zone_device *tz;
 	struct mutex lock;	/* serialises register sequences and cache */
 	struct sm5703_fg_params params;
+	struct delayed_work poll_work;
 
 	unsigned int alert_soc;
 
@@ -839,6 +850,16 @@ static irqreturn_t sm5703_fg_irq_thread(int irq, void *data)
 	return IRQ_HANDLED;
 }
 
+static void sm5703_fg_poll_work(struct work_struct *work)
+{
+	struct sm5703_fg *fg = container_of(to_delayed_work(work),
+					    struct sm5703_fg, poll_work);
+
+	power_supply_changed(fg->psy);
+	queue_delayed_work(system_freezable_power_efficient_wq, &fg->poll_work,
+			   SM5703_FG_POLL_INTERVAL);
+}
+
 static int sm5703_fg_get_status(struct sm5703_fg *fg, int *status)
 {
 	union power_supply_propval val;
@@ -1261,12 +1282,18 @@ static int sm5703_fg_probe(struct i2c_client *client)
 			return dev_err_probe(dev, ret, "failed to request IRQ\n");
 	}
 
+	INIT_DEFERRABLE_WORK(&fg->poll_work, sm5703_fg_poll_work);
+	queue_delayed_work(system_freezable_power_efficient_wq, &fg->poll_work,
+			   SM5703_FG_POLL_INTERVAL);
+
 	return 0;
 }
 
 static void sm5703_fg_remove(struct i2c_client *client)
 {
 	struct sm5703_fg *fg = i2c_get_clientdata(client);
+
+	cancel_delayed_work_sync(&fg->poll_work);
 
 	if (fg->info)
 		power_supply_put_battery_info(fg->psy, fg->info);
