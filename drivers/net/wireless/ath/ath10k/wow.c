@@ -674,6 +674,20 @@ exit:
 
 int ath10k_wow_init(struct ath10k *ar)
 {
+	/*
+	 * The QCA9377 SDIO firmware in linux-firmware reports the WOW service
+	 * but its container does not carry the feature flag. On SDIO the
+	 * service is what counts: set the flag, which the suspend and wakeup
+	 * paths check again.
+	 */
+	if (!test_bit(ATH10K_FW_FEATURE_WOWLAN_SUPPORT,
+		      ar->running_fw->fw_file.fw_features) &&
+	    ar->hif.bus == ATH10K_BUS_SDIO &&
+	    test_bit(WMI_SERVICE_WOW, ar->wmi.svc_map) &&
+	    ar->running_fw == &ar->normal_mode_fw)
+		__set_bit(ATH10K_FW_FEATURE_WOWLAN_SUPPORT,
+			  ar->normal_mode_fw.fw_file.fw_features);
+
 	if (!test_bit(ATH10K_FW_FEATURE_WOWLAN_SUPPORT,
 		      ar->running_fw->fw_file.fw_features))
 		return 0;
