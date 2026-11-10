@@ -15,7 +15,8 @@
 #include "wmi-ops.h"
 
 static const struct wiphy_wowlan_support ath10k_wowlan_support = {
-	.flags = WIPHY_WOWLAN_DISCONNECT |
+	.flags = WIPHY_WOWLAN_ANY |
+		 WIPHY_WOWLAN_DISCONNECT |
 		 WIPHY_WOWLAN_MAGIC_PKT,
 	.pattern_min_len = WOW_MIN_PATTERN_SIZE,
 	.pattern_max_len = WOW_MAX_PATTERN_SIZE,
@@ -347,7 +348,11 @@ static int ath10k_vif_wow_set_wakeups(struct ath10k_vif *arvif,
 		__set_bit(WOW_RA_MATCH_EVENT, &wow_mask);
 		break;
 	case WMI_VDEV_TYPE_STA:
-		if (wowlan->disconnect) {
+		/*
+		 * "any" keeps the station operating as it is, so the firmware
+		 * keeps watching the link and wakes the host if it is lost.
+		 */
+		if (wowlan->disconnect || wowlan->any) {
 			__set_bit(WOW_DEAUTH_RECVD_EVENT, &wow_mask);
 			__set_bit(WOW_DISASSOC_RECVD_EVENT, &wow_mask);
 			__set_bit(WOW_BMISS_EVENT, &wow_mask);
@@ -708,6 +713,19 @@ int ath10k_wow_init(struct ath10k *ar)
 	}
 
 	ar->wow.wowlan_support.n_patterns = ar->wow.max_num_patterns;
+
+	/*
+	 * With any trigger but "any", mac80211 tears down the Block Ack
+	 * sessions before suspend, behind the back of the firmware that owns
+	 * them, and the QCA9377 SDIO firmware asserts on the next frame it
+	 * receives in WoW. On SDIO offer "any" alone, so that no request from
+	 * user space can lead there.
+	 */
+	if (ar->hif.bus == ATH10K_BUS_SDIO) {
+		ar->wow.wowlan_support.flags = WIPHY_WOWLAN_ANY;
+		ar->wow.wowlan_support.n_patterns = 0;
+	}
+
 	ar->hw->wiphy->wowlan = &ar->wow.wowlan_support;
 
 	device_set_wakeup_capable(ar->dev, true);
