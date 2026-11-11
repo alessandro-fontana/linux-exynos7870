@@ -568,6 +568,14 @@ int ath10k_wow_op_suspend(struct ieee80211_hw *hw,
 
 	mutex_lock(&ar->conf_mutex);
 
+	/* The firmware would not answer: suspend again once recovered */
+	if (ar->state != ATH10K_STATE_ON ||
+	    atomic_read(&ar->pending_recovery) ||
+	    work_pending(&ar->recovery_check_work)) {
+		mutex_unlock(&ar->conf_mutex);
+		return -EBUSY;
+	}
+
 	if (WARN_ON(!test_bit(ATH10K_FW_FEATURE_WOWLAN_SUPPORT,
 			      ar->running_fw->fw_file.fw_features))) {
 		ret = 1;
@@ -647,8 +655,13 @@ int ath10k_wow_op_resume(struct ieee80211_hw *hw)
 	}
 
 	ret = ath10k_wow_wakeup(ar);
-	if (ret)
+	if (ret) {
 		ath10k_warn(ar, "failed to wakeup from wow: %d\n", ret);
+		/* A restart from resume fails on SDIO (BMI timeouts) */
+		ath10k_core_start_recovery(ar);
+		ret = 0;
+		goto exit;
+	}
 
 	ret = ath10k_wow_nlo_cleanup(ar);
 	if (ret)
