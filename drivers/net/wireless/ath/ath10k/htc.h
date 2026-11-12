@@ -99,7 +99,9 @@ enum ath10k_ath10k_htc_msg_id {
 	ATH10K_HTC_MSG_CONNECT_SERVICE_RESP_ID = 3,
 	ATH10K_HTC_MSG_SETUP_COMPLETE_ID       = 4,
 	ATH10K_HTC_MSG_SETUP_COMPLETE_EX_ID    = 5,
-	ATH10K_HTC_MSG_SEND_SUSPEND_COMPLETE   = 6
+	ATH10K_HTC_MSG_SEND_SUSPEND_COMPLETE   = 6,
+	ATH10K_HTC_MSG_NACK_SUSPEND            = 7,
+	ATH10K_HTC_MSG_WAKEUP_FROM_SUSPEND_ID  = 8,
 };
 
 enum ath10k_htc_version {
@@ -311,7 +313,7 @@ enum ath10k_htc_ep_id {
 };
 
 struct ath10k_htc_ops {
-	void (*target_send_suspend_complete)(struct ath10k *ar);
+	void (*target_send_suspend_complete)(struct ath10k *ar, bool ack);
 };
 
 struct ath10k_htc_ep_ops {

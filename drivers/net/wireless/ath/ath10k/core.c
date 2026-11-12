@@ -811,9 +811,14 @@ void ath10k_core_get_fw_features_str(struct ath10k *ar,
 	}
 }
 
-static void ath10k_send_suspend_complete(struct ath10k *ar)
+static void ath10k_send_suspend_complete(struct ath10k *ar, bool ack)
 {
-	ath10k_dbg(ar, ATH10K_DBG_BOOT, "boot suspend complete\n");
+	ath10k_dbg(ar, ATH10K_DBG_BOOT, "boot suspend complete %d\n", ack);
+
+	if (ack)
+		set_bit(ATH10K_FLAG_HTC_SUSPEND_COMPLETE, &ar->dev_flags);
+	else
+		clear_bit(ATH10K_FLAG_HTC_SUSPEND_COMPLETE, &ar->dev_flags);
 
 	complete(&ar->target_suspend);
 }
@@ -3309,6 +3314,7 @@ int ath10k_wait_for_suspend(struct ath10k *ar, u32 suspend_opt)
 	int ret;
 	unsigned long time_left;
 
+	clear_bit(ATH10K_FLAG_HTC_SUSPEND_COMPLETE, &ar->dev_flags);
 	reinit_completion(&ar->target_suspend);
 
 	ret = ath10k_wmi_pdev_suspend_target(ar, suspend_opt);
@@ -3322,6 +3328,11 @@ int ath10k_wait_for_suspend(struct ath10k *ar, u32 suspend_opt)
 	if (!time_left) {
 		ath10k_warn(ar, "suspend timed out - target pause event never came\n");
 		return -ETIMEDOUT;
+	}
+
+	if (!test_bit(ATH10K_FLAG_HTC_SUSPEND_COMPLETE, &ar->dev_flags)) {
+		ath10k_warn(ar, "target refused to suspend\n");
+		return -EBUSY;
 	}
 
 	return 0;

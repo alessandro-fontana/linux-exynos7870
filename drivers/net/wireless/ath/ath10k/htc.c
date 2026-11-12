@@ -557,10 +557,17 @@ static void ath10k_htc_control_rx_complete(struct ath10k *ar,
 		complete(&htc->ctl_resp);
 		break;
 	case ATH10K_HTC_MSG_SEND_SUSPEND_COMPLETE:
-		htc->htc_ops.target_send_suspend_complete(ar);
+		htc->htc_ops.target_send_suspend_complete(ar, true);
+		break;
+	case ATH10K_HTC_MSG_NACK_SUSPEND:
+		htc->htc_ops.target_send_suspend_complete(ar, false);
+		break;
+	case ATH10K_HTC_MSG_WAKEUP_FROM_SUSPEND_ID:
+		ath10k_dbg(ar, ATH10K_DBG_HTC, "htc wakeup from suspend\n");
 		break;
 	default:
-		ath10k_warn(ar, "ignoring unsolicited htc ep0 event\n");
+		ath10k_warn(ar, "ignoring unsolicited htc ep0 event %u\n",
+			    __le16_to_cpu(msg->hdr.message_id));
 		break;
 	}
 

@@ -869,6 +869,9 @@ enum ath10k_dev_flags {
 
 	/* protected by conf_mutex */
 	ATH10K_FLAG_NAPI_ENABLED,
+
+	/* The target accepted the last suspend request */
+	ATH10K_FLAG_HTC_SUSPEND_COMPLETE,
 };
 
 enum ath10k_cal_mode {

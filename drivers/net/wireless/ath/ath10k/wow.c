@@ -519,6 +519,7 @@ static int ath10k_wow_enable(struct ath10k *ar)
 
 	lockdep_assert_held(&ar->conf_mutex);
 
+	clear_bit(ATH10K_FLAG_HTC_SUSPEND_COMPLETE, &ar->dev_flags);
 	reinit_completion(&ar->target_suspend);
 
 	ret = ath10k_wmi_wow_enable(ar);
@@ -532,6 +533,10 @@ static int ath10k_wow_enable(struct ath10k *ar)
 		ath10k_warn(ar, "timed out while waiting for suspend completion\n");
 		return -ETIMEDOUT;
 	}
+
+	/* A busy firmware refuses WoW and stays awake */
+	if (!test_bit(ATH10K_FLAG_HTC_SUSPEND_COMPLETE, &ar->dev_flags))
+		return -EAGAIN;
 
 	return 0;
 }
@@ -599,6 +604,13 @@ int ath10k_wow_op_suspend(struct ieee80211_hw *hw,
 	ath10k_mac_wait_tx_complete(ar);
 
 	ret = ath10k_wow_enable(ar);
+	if (ret == -EAGAIN) {
+		/* Abort the suspend rather than drop the connection */
+		ath10k_warn(ar, "wow refused by the firmware, aborting suspend\n");
+		ath10k_wow_cleanup(ar);
+		mutex_unlock(&ar->conf_mutex);
+		return -EBUSY;
+	}
 	if (ret) {
 		ath10k_warn(ar, "failed to start wow: %d\n", ret);
 		goto cleanup;
