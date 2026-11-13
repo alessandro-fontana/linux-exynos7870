@@ -565,6 +565,55 @@ static int ath10k_wow_wakeup(struct ath10k *ar)
 	return 0;
 }
 
+/* In WoW the QCA9377 SDIO firmware still forwards beacons to the host, and
+ * on a busy network one of these forwards can make it assert. Wake for fewer
+ * beacons while suspended, as the vendor driver does (gEnableModulatedDTIM=3),
+ * within the listen interval announced to the AP.
+ */
+#define ATH10K_WOW_SUSPEND_DTIMS 3
+
+static void ath10k_wow_set_suspend_dtim(struct ath10k *ar, bool suspend)
+{
+	struct ath10k_vif *arvif;
+	u32 dtim, dtims, li, policy;
+	int ret;
+
+	lockdep_assert_held(&ar->conf_mutex);
+
+	list_for_each_entry(arvif, &ar->arvifs, list) {
+		if (arvif->vdev_type != WMI_VDEV_TYPE_STA ||
+		    !arvif->is_up || !arvif->ps)
+			continue;
+
+		dtim = max_t(u32, arvif->dtim_period, 1);
+		dtims = min_t(u32, ATH10K_WOW_SUSPEND_DTIMS,
+			      ATH10K_MAX_HW_LISTEN_INTERVAL / dtim);
+		if (!dtims)
+			continue;
+
+		li = suspend ? dtims * dtim : 1;
+		policy = suspend ? WMI_DTIM_POLICY_NORMAL : WMI_DTIM_POLICY_STICK;
+
+		ret = ath10k_wmi_vdev_set_param(ar, arvif->vdev_id,
+						ar->wmi.vdev_param->listen_interval,
+						li);
+		if (ret && ret != -EOPNOTSUPP)
+			ath10k_warn(ar, "failed to set listen interval %u on vdev %i: %d\n",
+				    li, arvif->vdev_id, ret);
+
+		ret = ath10k_wmi_vdev_set_param(ar, arvif->vdev_id,
+						ar->wmi.vdev_param->dtim_policy,
+						policy);
+		if (ret && ret != -EOPNOTSUPP)
+			ath10k_warn(ar, "failed to set dtim policy %u on vdev %i: %d\n",
+				    policy, arvif->vdev_id, ret);
+
+		ath10k_dbg(ar, ATH10K_DBG_MAC,
+			   "wow vdev %i listen interval %u dtim policy %u\n",
+			   arvif->vdev_id, li, policy);
+	}
+}
+
 int ath10k_wow_op_suspend(struct ieee80211_hw *hw,
 			  struct cfg80211_wowlan *wowlan)
 {
@@ -603,17 +652,20 @@ int ath10k_wow_op_suspend(struct ieee80211_hw *hw,
 
 	ath10k_mac_wait_tx_complete(ar);
 
+	ath10k_wow_set_suspend_dtim(ar, true);
+
 	ret = ath10k_wow_enable(ar);
 	if (ret == -EAGAIN) {
 		/* Abort the suspend rather than drop the connection */
 		ath10k_warn(ar, "wow refused by the firmware, aborting suspend\n");
+		ath10k_wow_set_suspend_dtim(ar, false);
 		ath10k_wow_cleanup(ar);
 		mutex_unlock(&ar->conf_mutex);
 		return -EBUSY;
 	}
 	if (ret) {
 		ath10k_warn(ar, "failed to start wow: %d\n", ret);
-		goto cleanup;
+		goto restore_dtim;
 	}
 
 	ret = ath10k_hif_suspend(ar);
@@ -626,6 +678,9 @@ int ath10k_wow_op_suspend(struct ieee80211_hw *hw,
 
 wakeup:
 	ath10k_wow_wakeup(ar);
+
+restore_dtim:
+	ath10k_wow_set_suspend_dtim(ar, false);
 
 cleanup:
 	ath10k_wow_cleanup(ar);
@@ -674,6 +729,8 @@ int ath10k_wow_op_resume(struct ieee80211_hw *hw)
 		ret = 0;
 		goto exit;
 	}
+
+	ath10k_wow_set_suspend_dtim(ar, false);
 
 	ret = ath10k_wow_nlo_cleanup(ar);
 	if (ret)
