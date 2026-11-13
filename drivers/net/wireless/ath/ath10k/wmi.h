@@ -5228,6 +5228,7 @@ struct wmi_vdev_param_map {
 	u32 dec_tsf;
 	u32 disable_4addr_src_lrn;
 	u32 rtt_responder_role;
+	u32 dtim_policy;
 };
 
 #define WMI_VDEV_PARAM_UNSUPPORTED 0
@@ -6496,6 +6497,13 @@ enum wmi_10_2_peer_flags {
 
 /* Maximum listen interval supported by hw in units of beacon interval */
 #define ATH10K_MAX_HW_LISTEN_INTERVAL 5
+
+/* Values of the dtim_policy vdev parameter */
+enum wmi_dtim_policy {
+	WMI_DTIM_POLICY_IGNORE = 1,
+	WMI_DTIM_POLICY_NORMAL = 2,
+	WMI_DTIM_POLICY_STICK = 3,
+};
 
 struct wmi_common_peer_assoc_complete_cmd {
 	struct wmi_mac_addr peer_macaddr;
