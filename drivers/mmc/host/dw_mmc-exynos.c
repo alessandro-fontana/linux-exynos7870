@@ -719,6 +719,51 @@ static u32 dw_mci_exynos_get_drto_clks(struct dw_mci *host)
 	return (((drto_clks & 0x7) - 1) * 0xFFFFFF) + ((drto_clks & 0xFFFFF8));
 }
 
+/*
+ * On Exynos7870 TMOUT[10:8] is an extension field of the data timeout, as on
+ * ARTPEC-8, and the generic encoding puts the low bits of the count there: a
+ * count ending in three zero bits gives a data timeout of almost nothing.
+ * The vendor kernel and the ARTPEC-8 code read that field differently, but
+ * both agree with an extension of 1 (the timeout is TMOUT[31:11] * 8) and on
+ * the maximum, so only those two are used.
+ */
+#define EXYNOS7870_TMOUT_EXT1_MAX	0xFFFFF8
+#define EXYNOS7870_TMOUT_MAX_CLKS	0x6FFFFF2
+
+static void dw_mci_exynos7870_set_data_timeout(struct dw_mci *host,
+					       unsigned int timeout_ns)
+{
+	u32 clk_div, tmout;
+	u64 tmp;
+
+	clk_div = (mci_readl(host, CLKDIV) & 0xFF) * 2;
+	if (clk_div == 0)
+		clk_div = 1;
+
+	tmp = DIV_ROUND_UP_ULL((u64)timeout_ns * host->bus_hz, NSEC_PER_SEC);
+	tmp = DIV_ROUND_UP_ULL(tmp, clk_div);
+
+	/* TMOUT[7:0] (RESPONSE_TIMEOUT) at its maximum */
+	tmout = 0xFF;
+
+	if (!tmp || tmp > EXYNOS7870_TMOUT_EXT1_MAX)
+		tmout |= 0xFFFFFF << 8;
+	else
+		tmout |= (ALIGN(tmp, 8) | 1) << 8;
+
+	mci_writel(host, TMOUT, tmout);
+}
+
+static u32 dw_mci_exynos7870_get_drto_clks(struct dw_mci *host)
+{
+	u32 drto_clks = mci_readl(host, TMOUT) >> 8;
+
+	if ((drto_clks & 0x7) == 1)
+		return drto_clks & ~0x7;
+
+	return EXYNOS7870_TMOUT_MAX_CLKS;
+}
+
 /* Common capabilities of Exynos4/Exynos5 SoC */
 static unsigned long exynos_dwmmc_caps[4] = {
 	MMC_CAP_1_8V_DDR | MMC_CAP_8_BIT_DATA,
@@ -737,6 +782,20 @@ static const struct dw_mci_drv_data exynos_drv_data = {
 	.execute_tuning		= dw_mci_exynos_execute_tuning,
 	.prepare_hs400_tuning	= dw_mci_exynos_prepare_hs400_tuning,
 	.hs400_enhanced_strobe	= dw_mci_exynos_hs400_enhanced_strobe,
+};
+
+static const struct dw_mci_drv_data exynos7870_drv_data = {
+	.caps			= exynos_dwmmc_caps,
+	.num_caps		= ARRAY_SIZE(exynos_dwmmc_caps),
+	.common_caps		= MMC_CAP_CMD23,
+	.init			= dw_mci_exynos_priv_init,
+	.set_ios		= dw_mci_exynos_set_ios,
+	.parse_dt		= dw_mci_exynos_parse_dt,
+	.execute_tuning		= dw_mci_exynos_execute_tuning,
+	.prepare_hs400_tuning	= dw_mci_exynos_prepare_hs400_tuning,
+	.hs400_enhanced_strobe	= dw_mci_exynos_hs400_enhanced_strobe,
+	.set_data_timeout	= dw_mci_exynos7870_set_data_timeout,
+	.get_drto_clks		= dw_mci_exynos7870_get_drto_clks,
 };
 
 static const struct dw_mci_drv_data artpec_drv_data = {
@@ -763,9 +822,9 @@ static const struct of_device_id dw_mci_exynos_match[] = {
 	{ .compatible = "samsung,exynos7-dw-mshc-smu",
 			.data = &exynos_drv_data, },
 	{ .compatible = "samsung,exynos7870-dw-mshc",
-			.data = &exynos_drv_data, },
+			.data = &exynos7870_drv_data, },
 	{ .compatible = "samsung,exynos7870-dw-mshc-smu",
-			.data = &exynos_drv_data, },
+			.data = &exynos7870_drv_data, },
 	{ .compatible = "axis,artpec8-dw-mshc",
 			.data = &artpec_drv_data, },
 	{},
