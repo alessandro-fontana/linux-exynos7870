@@ -549,8 +549,20 @@ static void ath10k_wmi_tlv_event_gtk_offload_status(struct ath10k *ar,
 	arvif->rekey_data.replay_ctr = replay_ctr;
 	spin_unlock_bh(&ar->data_lock);
 
-	if (!__le32_to_cpu(ev->refresh_cnt))
+	/*
+	 * The replay counter moved but no key was renewed: the firmware saw
+	 * the AP's group key message 1 and could not answer it, as with SAE,
+	 * whose key descriptor version it does not handle. The AP drops the
+	 * station, which the host would only learn after a SA Query timeout.
+	 * Report the loss now.
+	 */
+	if (!__le32_to_cpu(ev->refresh_cnt)) {
+		ath10k_dbg(ar, ATH10K_DBG_WMI,
+			   "wmi tlv gtk rekey missed in wow on vdev %i\n",
+			   arvif->vdev_id);
+		ieee80211_connection_loss(arvif->vif);
 		goto out;
+	}
 
 	/* user space expects the replay counter in big endian */
 	replay_ctr_be = cpu_to_be64(replay_ctr);
