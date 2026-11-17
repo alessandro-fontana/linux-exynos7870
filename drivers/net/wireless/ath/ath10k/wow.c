@@ -614,6 +614,96 @@ static void ath10k_wow_set_suspend_dtim(struct ath10k *ar, bool suspend)
 	}
 }
 
+/*
+ * Without a wakeup line to the host (QCA9377 SDIO on this board), the host
+ * never sees the group key handshake while in WoW: the AP gives up and drops
+ * the station. Let the firmware answer it with the KEK and KCK of the
+ * current PTK; on resume read back the replay counter and pass it on.
+ */
+static void ath10k_wow_gtk_offload(struct ath10k *ar, bool enable)
+{
+	struct ath10k_vif *arvif;
+	u64 replay_ctr;
+	int ret;
+
+	lockdep_assert_held(&ar->conf_mutex);
+
+	if (!test_bit(WMI_SERVICE_GTK_OFFLOAD, ar->wmi.svc_map))
+		return;
+
+	list_for_each_entry(arvif, &ar->arvifs, list) {
+		if (arvif->vdev_type != WMI_VDEV_TYPE_STA || !arvif->is_up)
+			continue;
+
+		if (enable) {
+			if (!arvif->rekey_data.valid)
+				continue;
+
+			spin_lock_bh(&ar->data_lock);
+			replay_ctr = arvif->rekey_data.replay_ctr;
+			spin_unlock_bh(&ar->data_lock);
+
+			ret = ath10k_wmi_gtk_offload(ar, arvif->vdev_id,
+						     WMI_GTK_OFFLOAD_ENABLE_OPCODE,
+						     arvif->rekey_data.kek,
+						     arvif->rekey_data.kck,
+						     replay_ctr);
+			if (ret) {
+				ath10k_warn(ar, "failed to enable gtk offload on vdev %i: %d\n",
+					    arvif->vdev_id, ret);
+				continue;
+			}
+			arvif->rekey_data.offloaded = true;
+			continue;
+		}
+
+		if (!arvif->rekey_data.offloaded)
+			continue;
+		arvif->rekey_data.offloaded = false;
+
+		/* The status event comes before the disable takes effect */
+		ret = ath10k_wmi_gtk_offload(ar, arvif->vdev_id,
+					     WMI_GTK_OFFLOAD_REQUEST_STATUS_OPCODE,
+					     NULL, NULL, 0);
+		if (ret)
+			ath10k_warn(ar, "failed to request gtk offload status on vdev %i: %d\n",
+				    arvif->vdev_id, ret);
+
+		ret = ath10k_wmi_gtk_offload(ar, arvif->vdev_id,
+					     WMI_GTK_OFFLOAD_DISABLE_OPCODE,
+					     NULL, NULL, 0);
+		if (ret)
+			ath10k_warn(ar, "failed to disable gtk offload on vdev %i: %d\n",
+				    arvif->vdev_id, ret);
+	}
+}
+
+void ath10k_wow_op_set_rekey_data(struct ieee80211_hw *hw,
+				  struct ieee80211_vif *vif,
+				  struct cfg80211_gtk_rekey_data *data)
+{
+	struct ath10k *ar = hw->priv;
+	struct ath10k_vif *arvif = (void *)vif->drv_priv;
+
+	/* The firmware takes 16 byte keys only */
+	if (data->kek_len != NL80211_KEK_LEN ||
+	    data->kck_len != NL80211_KCK_LEN)
+		return;
+
+	mutex_lock(&ar->conf_mutex);
+
+	memcpy(arvif->rekey_data.kek, data->kek, NL80211_KEK_LEN);
+	memcpy(arvif->rekey_data.kck, data->kck, NL80211_KCK_LEN);
+
+	spin_lock_bh(&ar->data_lock);
+	arvif->rekey_data.replay_ctr = be64_to_cpup((const __be64 *)data->replay_ctr);
+	spin_unlock_bh(&ar->data_lock);
+
+	arvif->rekey_data.valid = true;
+
+	mutex_unlock(&ar->conf_mutex);
+}
+
 int ath10k_wow_op_suspend(struct ieee80211_hw *hw,
 			  struct cfg80211_wowlan *wowlan)
 {
@@ -654,10 +744,13 @@ int ath10k_wow_op_suspend(struct ieee80211_hw *hw,
 
 	ath10k_wow_set_suspend_dtim(ar, true);
 
+	ath10k_wow_gtk_offload(ar, true);
+
 	ret = ath10k_wow_enable(ar);
 	if (ret == -EAGAIN) {
 		/* Abort the suspend rather than drop the connection */
 		ath10k_warn(ar, "wow refused by the firmware, aborting suspend\n");
+		ath10k_wow_gtk_offload(ar, false);
 		ath10k_wow_set_suspend_dtim(ar, false);
 		ath10k_wow_cleanup(ar);
 		mutex_unlock(&ar->conf_mutex);
@@ -680,6 +773,7 @@ wakeup:
 	ath10k_wow_wakeup(ar);
 
 restore_dtim:
+	ath10k_wow_gtk_offload(ar, false);
 	ath10k_wow_set_suspend_dtim(ar, false);
 
 cleanup:
@@ -730,6 +824,7 @@ int ath10k_wow_op_resume(struct ieee80211_hw *hw)
 		goto exit;
 	}
 
+	ath10k_wow_gtk_offload(ar, false);
 	ath10k_wow_set_suspend_dtim(ar, false);
 
 	ret = ath10k_wow_nlo_cleanup(ar);

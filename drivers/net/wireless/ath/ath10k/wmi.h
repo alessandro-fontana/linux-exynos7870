@@ -6975,6 +6975,10 @@ struct wmi_pdev_bss_chan_info_event {
 } __packed;
 
 /* WOW structures */
+#define WMI_GTK_OFFLOAD_ENABLE_OPCODE		0x01000000
+#define WMI_GTK_OFFLOAD_DISABLE_OPCODE		0x02000000
+#define WMI_GTK_OFFLOAD_REQUEST_STATUS_OPCODE	0x04000000
+
 enum wmi_wow_wakeup_event {
 	WOW_BMISS_EVENT = 0,
 	WOW_BETTER_AP_EVENT,

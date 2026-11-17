@@ -640,6 +640,17 @@ struct ath10k_vif {
 	u32 rate_code[ATH10K_TID_MAX];
 	int rtscts[ATH10K_TID_MAX];
 	u32 tids_rst;
+
+	/* GTK rekey offload in WoW; replay_ctr protected by data_lock,
+	 * the rest by conf_mutex
+	 */
+	struct {
+		u8 kek[NL80211_KEK_LEN];
+		u8 kck[NL80211_KCK_LEN];
+		u64 replay_ctr;
+		bool valid;
+		bool offloaded;
+	} rekey_data;
 };
 
 struct ath10k_vif_iter {

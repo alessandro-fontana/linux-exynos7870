@@ -66,6 +66,8 @@ static const struct wmi_tlv_policy wmi_tlv_policies[] = {
 		= { .min_len = sizeof(struct wmi_tlv_wow_event_info) },
 	[WMI_TLV_TAG_STRUCT_TX_PAUSE_EVENT]
 		= { .min_len = sizeof(struct wmi_tlv_tx_pause_ev) },
+	[WMI_TLV_TAG_STRUCT_GTK_OFFLOAD_STATUS_EVENT]
+		= { .min_len = sizeof(struct wmi_tlv_gtk_offload_status_ev) },
 };
 
 static int
@@ -502,6 +504,63 @@ static int ath10k_wmi_tlv_event_tx_pause(struct ath10k *ar,
 	return 0;
 }
 
+static void ath10k_wmi_tlv_event_gtk_offload_status(struct ath10k *ar,
+						    struct sk_buff *skb)
+{
+	const struct wmi_tlv_gtk_offload_status_ev *ev;
+	struct ath10k_vif *arvif;
+	__be64 replay_ctr_be;
+	u64 replay_ctr;
+	const void **tb;
+	int ret;
+
+	tb = ath10k_wmi_tlv_parse_alloc(ar, skb->data, skb->len, GFP_ATOMIC);
+	if (IS_ERR(tb)) {
+		ret = PTR_ERR(tb);
+		ath10k_warn(ar, "failed to parse gtk offload status event: %d\n",
+			    ret);
+		return;
+	}
+
+	ev = tb[WMI_TLV_TAG_STRUCT_GTK_OFFLOAD_STATUS_EVENT];
+	if (!ev) {
+		kfree(tb);
+		return;
+	}
+
+	replay_ctr = __le64_to_cpu(ev->replay_ctr);
+
+	ath10k_dbg(ar, ATH10K_DBG_WMI,
+		   "wmi tlv gtk offload status vdev %u flags 0x%08x refresh_cnt %u replay_ctr %llu\n",
+		   __le32_to_cpu(ev->vdev_id), __le32_to_cpu(ev->flags),
+		   __le32_to_cpu(ev->refresh_cnt), replay_ctr);
+
+	rcu_read_lock();
+
+	arvif = ath10k_get_arvif(ar, __le32_to_cpu(ev->vdev_id));
+	if (!arvif || arvif->vdev_type != WMI_VDEV_TYPE_STA)
+		goto out;
+
+	spin_lock_bh(&ar->data_lock);
+	if (replay_ctr <= arvif->rekey_data.replay_ctr) {
+		spin_unlock_bh(&ar->data_lock);
+		goto out;
+	}
+	arvif->rekey_data.replay_ctr = replay_ctr;
+	spin_unlock_bh(&ar->data_lock);
+
+	if (!__le32_to_cpu(ev->refresh_cnt))
+		goto out;
+
+	/* user space expects the replay counter in big endian */
+	replay_ctr_be = cpu_to_be64(replay_ctr);
+	ieee80211_gtk_rekey_notify(arvif->vif, arvif->bssid,
+				   (const u8 *)&replay_ctr_be, GFP_ATOMIC);
+out:
+	rcu_read_unlock();
+	kfree(tb);
+}
+
 static void ath10k_wmi_tlv_event_rfkill_state_change(struct ath10k *ar,
 						     struct sk_buff *skb)
 {
@@ -750,7 +809,7 @@ static void ath10k_wmi_tlv_op_rx(struct ath10k *ar, struct sk_buff *skb)
 		ath10k_wmi_event_pdev_ftm_intg(ar, skb);
 		break;
 	case WMI_TLV_GTK_OFFLOAD_STATUS_EVENTID:
-		ath10k_wmi_event_gtk_offload_status(ar, skb);
+		ath10k_wmi_tlv_event_gtk_offload_status(ar, skb);
 		break;
 	case WMI_TLV_GTK_REKEY_FAIL_EVENTID:
 		ath10k_wmi_event_gtk_rekey_fail(ar, skb);
@@ -3745,6 +3804,36 @@ ath10k_wmi_tlv_gen_wow_host_wakeup_ind(struct ath10k *ar)
 }
 
 static struct sk_buff *
+ath10k_wmi_tlv_op_gen_gtk_offload(struct ath10k *ar, u32 vdev_id, u32 flags,
+				  const u8 *kek, const u8 *kck, u64 replay_ctr)
+{
+	struct wmi_tlv_gtk_offload_cmd *cmd;
+	struct wmi_tlv *tlv;
+	struct sk_buff *skb;
+
+	skb = ath10k_wmi_alloc_skb(ar, sizeof(*tlv) + sizeof(*cmd));
+	if (!skb)
+		return ERR_PTR(-ENOMEM);
+
+	tlv = (void *)skb->data;
+	tlv->tag = __cpu_to_le16(WMI_TLV_TAG_STRUCT_GTK_OFFLOAD_CMD);
+	tlv->len = __cpu_to_le16(sizeof(*cmd));
+	cmd = (void *)tlv->value;
+
+	cmd->vdev_id = __cpu_to_le32(vdev_id);
+	cmd->flags = __cpu_to_le32(flags);
+	if (flags & WMI_GTK_OFFLOAD_ENABLE_OPCODE) {
+		memcpy(cmd->kek, kek, sizeof(cmd->kek));
+		memcpy(cmd->kck, kck, sizeof(cmd->kck));
+		cmd->replay_ctr = __cpu_to_le64(replay_ctr);
+	}
+
+	ath10k_dbg(ar, ATH10K_DBG_WMI, "wmi tlv gtk offload vdev %u flags 0x%08x\n",
+		   vdev_id, flags);
+	return skb;
+}
+
+static struct sk_buff *
 ath10k_wmi_tlv_op_gen_wow_add_pattern(struct ath10k *ar, u32 vdev_id,
 				      u32 pattern_id, const u8 *pattern,
 				      const u8 *bitmask, int pattern_len,
@@ -4615,6 +4704,7 @@ static const struct wmi_ops wmi_tlv_ops = {
 	.gen_wow_add_wakeup_event = ath10k_wmi_tlv_op_gen_wow_add_wakeup_event,
 	.gen_wow_host_wakeup_ind = ath10k_wmi_tlv_gen_wow_host_wakeup_ind,
 	.gen_wow_add_pattern = ath10k_wmi_tlv_op_gen_wow_add_pattern,
+	.gen_gtk_offload = ath10k_wmi_tlv_op_gen_gtk_offload,
 	.gen_wow_del_pattern = ath10k_wmi_tlv_op_gen_wow_del_pattern,
 	.gen_wow_config_pno = ath10k_wmi_tlv_op_gen_config_pno,
 	.gen_update_fw_tdls_state = ath10k_wmi_tlv_op_gen_update_fw_tdls_state,

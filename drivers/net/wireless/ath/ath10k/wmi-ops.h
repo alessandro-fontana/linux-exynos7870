@@ -187,6 +187,9 @@ struct wmi_ops {
 					       int pattern_offset);
 	struct sk_buff *(*gen_wow_del_pattern)(struct ath10k *ar, u32 vdev_id,
 					       u32 pattern_id);
+	struct sk_buff *(*gen_gtk_offload)(struct ath10k *ar, u32 vdev_id,
+					   u32 flags, const u8 *kek,
+					   const u8 *kck, u64 replay_ctr);
 	struct sk_buff *(*gen_update_fw_tdls_state)(struct ath10k *ar,
 						    u32 vdev_id,
 						    enum wmi_tdls_state state);
@@ -1440,6 +1443,25 @@ ath10k_wmi_wow_add_pattern(struct ath10k *ar, u32 vdev_id, u32 pattern_id,
 		return PTR_ERR(skb);
 
 	cmd_id = ar->wmi.cmd->wow_add_wake_pattern_cmdid;
+	return ath10k_wmi_cmd_send(ar, skb, cmd_id);
+}
+
+static inline int
+ath10k_wmi_gtk_offload(struct ath10k *ar, u32 vdev_id, u32 flags,
+		       const u8 *kek, const u8 *kck, u64 replay_ctr)
+{
+	struct sk_buff *skb;
+	u32 cmd_id;
+
+	if (!ar->wmi.ops->gen_gtk_offload)
+		return -EOPNOTSUPP;
+
+	skb = ar->wmi.ops->gen_gtk_offload(ar, vdev_id, flags, kek, kck,
+					   replay_ctr);
+	if (IS_ERR(skb))
+		return PTR_ERR(skb);
+
+	cmd_id = ar->wmi.cmd->gtk_offload_cmdid;
 	return ath10k_wmi_cmd_send(ar, skb, cmd_id);
 }
 

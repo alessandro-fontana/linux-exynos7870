@@ -3205,6 +3205,8 @@ static void ath10k_bss_disassoc(struct ieee80211_hw *hw,
 
 	arvif->def_wep_key_idx = -1;
 
+	memset(&arvif->rekey_data, 0, sizeof(arvif->rekey_data));
+
 	ret = ath10k_mac_vif_recalc_txbf(ar, vif, vht_cap);
 	if (ret) {
 		ath10k_warn(ar, "failed to recalc txbf for vdev %i: %d\n",
@@ -9522,6 +9524,7 @@ static const struct ieee80211_ops ath10k_ops = {
 	.suspend			= ath10k_wow_op_suspend,
 	.resume				= ath10k_wow_op_resume,
 	.set_wakeup			= ath10k_wow_op_set_wakeup,
+	.set_rekey_data			= ath10k_wow_op_set_rekey_data,
 	.sched_scan_start		= ath10k_sched_scan_start,
 	.sched_scan_stop		= ath10k_sched_scan_stop,
 #endif

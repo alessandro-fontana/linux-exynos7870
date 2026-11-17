@@ -2416,6 +2416,25 @@ struct wmi_tlv_rfkill_state_change_ev {
 	__le32 radio_state;
 };
 
+#define WMI_TLV_GTK_OFFLOAD_KEK_BYTES	16
+#define WMI_TLV_GTK_OFFLOAD_KCK_BYTES	16
+
+struct wmi_tlv_gtk_offload_cmd {
+	__le32 vdev_id;
+	__le32 flags;
+	u8 kek[WMI_TLV_GTK_OFFLOAD_KEK_BYTES];
+	u8 kck[WMI_TLV_GTK_OFFLOAD_KCK_BYTES];
+	__le64 replay_ctr;
+} __packed;
+
+/* Followed by the IGTK, which this driver does not use */
+struct wmi_tlv_gtk_offload_status_ev {
+	__le32 vdev_id;
+	__le32 flags;
+	__le32 refresh_cnt;
+	__le64 replay_ctr;
+} __packed;
+
 void ath10k_wmi_tlv_attach(struct ath10k *ar);
 
 enum wmi_nlo_auth_algorithm {
