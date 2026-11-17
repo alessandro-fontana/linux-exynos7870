@@ -662,6 +662,12 @@ static const struct ath10k_hw_params ath10k_hw_params_list[] = {
 		.use_fw_tx_credits = true,
 		.delay_unmap_buffer = false,
 		.mcast_frame_registration = false,
+		/*
+		 * With none, the firmware crashes in WoW when a frame for its
+		 * reorder offload arrives, such as a group key message 1. The
+		 * vendor driver sends the number of vdevs plus one.
+		 */
+		.num_offload_peers = 3,
 	},
 	{
 		.id = QCA4019_HW_1_0_DEV_VERSION,

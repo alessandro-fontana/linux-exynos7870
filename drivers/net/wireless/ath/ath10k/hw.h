@@ -638,6 +638,11 @@ struct ath10k_hw_params {
 
 	/* The hardware support multicast frame registrations */
 	bool mcast_frame_registration;
+
+	/* Offload peers and reorder buffers to request in WMI TLV init when
+	 * the firmware does not report WMI_SERVICE_RX_FULL_REORDER
+	 */
+	u32 num_offload_peers;
 };
 
 struct htt_resp;

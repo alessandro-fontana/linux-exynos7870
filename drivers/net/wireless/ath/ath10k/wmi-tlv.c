@@ -1925,8 +1925,10 @@ static struct sk_buff *ath10k_wmi_tlv_op_gen_init(struct ath10k *ar)
 		cfg->num_offload_peers = __cpu_to_le32(TARGET_TLV_NUM_VDEVS);
 		cfg->num_offload_reorder_bufs = __cpu_to_le32(TARGET_TLV_NUM_VDEVS);
 	} else {
-		cfg->num_offload_peers = __cpu_to_le32(0);
-		cfg->num_offload_reorder_bufs = __cpu_to_le32(0);
+		cfg->num_offload_peers =
+			__cpu_to_le32(ar->hw_params.num_offload_peers);
+		cfg->num_offload_reorder_bufs =
+			__cpu_to_le32(ar->hw_params.num_offload_peers);
 	}
 
 	cfg->num_peer_keys = __cpu_to_le32(2);
